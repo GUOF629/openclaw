@@ -470,7 +470,7 @@ export async function runReplyAgent(params: {
         sessionEntry: activeSessionEntry,
         storePath,
       }).catch((err) => {
-        logVerbose(`deep memory delta update scheduling failed: ${String(err)}`);
+        defaultRuntime.error(`deep memory delta update scheduling failed: ${String(err)}`);
       });
     }
 

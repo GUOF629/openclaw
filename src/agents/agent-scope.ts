@@ -20,6 +20,7 @@ type ResolvedAgentConfig = {
   agentDir?: string;
   model?: AgentEntry["model"];
   memorySearch?: AgentEntry["memorySearch"];
+  deepMemory?: AgentEntry["deepMemory"];
   humanDelay?: AgentEntry["humanDelay"];
   heartbeat?: AgentEntry["heartbeat"];
   identity?: AgentEntry["identity"];
@@ -113,6 +114,7 @@ export function resolveAgentConfig(
         ? entry.model
         : undefined,
     memorySearch: entry.memorySearch,
+    deepMemory: entry.deepMemory,
     humanDelay: entry.humanDelay,
     heartbeat: entry.heartbeat,
     identity: entry.identity,
