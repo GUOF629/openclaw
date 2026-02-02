@@ -8,6 +8,8 @@ import { extractHintsFromText } from "./analyzer.js";
 import type { QdrantStore } from "./qdrant.js";
 import type { Neo4jStore } from "./neo4j.js";
 import type { DurableUpdateQueue } from "./durable-update-queue.js";
+import { requireApiKey, requireApiKeyForPaths } from "./auth.js";
+import { enforceBodySize, readJsonWithLimit } from "./body-limit.js";
 
 const RetrieveSchema = z.object({
   namespace: z.string().optional(),
@@ -50,10 +52,25 @@ export function createApi(params: {
 }) {
   const app = new Hono();
 
+  app.use("*", enforceBodySize(params.cfg));
+  // Always protect destructive/admin endpoints. Retrieve can be protected via REQUIRE_API_KEY/API_KEY.
+  app.use("*", requireApiKeyForPaths(params.cfg, { prefix: "/queue" }));
+  app.use("/forget", requireApiKey(params.cfg));
+  app.use("/update_memory_index", requireApiKey(params.cfg));
+  if (params.cfg.REQUIRE_API_KEY || params.cfg.API_KEY) {
+    app.use("/retrieve_context", requireApiKey(params.cfg));
+  }
+
   app.get("/health", (c) => c.json({ ok: true }));
 
   app.post("/retrieve_context", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
+    const body = await readJsonWithLimit<Record<string, unknown>>(c, {
+      limitBytes: params.cfg.MAX_BODY_BYTES,
+      fallback: {},
+    });
+    if (typeof body === "object" && body && "error" in body) {
+      return c.json(body, body.error === "payload_too_large" ? 413 : 400);
+    }
     const parsed = RetrieveSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: "invalid_request", details: parsed.error.issues }, 400);
@@ -74,7 +91,13 @@ export function createApi(params: {
   });
 
   app.post("/update_memory_index", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
+    const body = await readJsonWithLimit<Record<string, unknown>>(c, {
+      limitBytes: params.cfg.MAX_UPDATE_BODY_BYTES,
+      fallback: {},
+    });
+    if (typeof body === "object" && body && "error" in body) {
+      return c.json(body, body.error === "payload_too_large" ? 413 : 400);
+    }
     const parsed = UpdateSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: "invalid_request", details: parsed.error.issues }, 400);
@@ -100,7 +123,13 @@ export function createApi(params: {
   // Minimal “forget” API: delete by explicit ids or by session.
   // This is intentionally best-effort and should be protected at the network layer.
   app.post("/forget", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
+    const body = await readJsonWithLimit<Record<string, unknown>>(c, {
+      limitBytes: params.cfg.MAX_BODY_BYTES,
+      fallback: {},
+    });
+    if (typeof body === "object" && body && "error" in body) {
+      return c.json(body, body.error === "payload_too_large" ? 413 : 400);
+    }
     const parsed = ForgetSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: "invalid_request", details: parsed.error.issues }, 400);

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { gzipSync, gunzipSync } from "node:zlib";
 import type { Logger } from "pino";
 import type { UpdateMemoryIndexResponse } from "./types.js";
 import type { DeepMemoryUpdater } from "./updater.js";
@@ -23,7 +24,10 @@ type PersistedUpdateTask = {
   attempt: number;
   nextRunAt: number; // epoch ms
   lastError?: string;
-  messages: unknown[];
+  // New format: compressed to reduce disk usage.
+  messages_gzip_base64?: string;
+  // Legacy format (back-compat).
+  messages?: unknown[];
 };
 
 function sleep(ms: number) {
@@ -34,6 +38,22 @@ function stableTranscriptHash(messages: unknown[]): { hash: string; count: numbe
   const count = Array.isArray(messages) ? messages.length : 0;
   const hash = crypto.createHash("sha256").update(JSON.stringify(messages ?? [])).digest("hex");
   return { hash, count };
+}
+
+function encodeMessages(messages: unknown[]): { b64: string; bytes: number } {
+  const json = JSON.stringify(messages ?? []);
+  const gz = gzipSync(Buffer.from(json, "utf8"), { level: 9 });
+  return { b64: gz.toString("base64"), bytes: gz.length };
+}
+
+function decodeMessages(task: PersistedUpdateTask): unknown[] {
+  if (task.messages_gzip_base64) {
+    const buf = Buffer.from(task.messages_gzip_base64, "base64");
+    const raw = gunzipSync(buf).toString("utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  }
+  return Array.isArray(task.messages) ? task.messages : [];
 }
 
 function backoffMs(params: { baseMs: number; maxMs: number; attempt: number }): number {
@@ -82,6 +102,7 @@ export class DurableUpdateQueue {
   private readonly retryMaxMs: number;
   private readonly keepDone: boolean;
   private readonly retentionDays: number;
+  private readonly maxTaskBytes: number;
 
   private active = 0;
   private stopped = false;
@@ -100,6 +121,7 @@ export class DurableUpdateQueue {
     retryMaxMs: number;
     keepDone: boolean;
     retentionDays: number;
+    maxTaskBytes: number;
   }) {
     this.log = params.log;
     this.updater = params.updater;
@@ -114,6 +136,7 @@ export class DurableUpdateQueue {
     this.retryMaxMs = Math.max(this.retryBaseMs, params.retryMaxMs);
     this.keepDone = params.keepDone;
     this.retentionDays = Math.max(1, params.retentionDays);
+    this.maxTaskBytes = Math.max(1, params.maxTaskBytes);
   }
 
   async init(): Promise<void> {
@@ -202,7 +225,24 @@ export class DurableUpdateQueue {
     const namespace = req.namespace?.trim() || "default";
     const key = `${namespace}::${req.sessionId}`;
     const { hash, count } = stableTranscriptHash(req.messages);
+
+    const existingPath = this.pendingFilesByKey.get(key);
+    if (existingPath) {
+      try {
+        const existing = await readJson<PersistedUpdateTask>(existingPath);
+        if (existing?.transcriptHash === hash) {
+          return { status: "queued", key, transcriptHash: hash };
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     const now = new Date();
+    const encoded = encodeMessages(Array.isArray(req.messages) ? (req.messages as unknown[]) : []);
+    if (encoded.bytes > this.maxTaskBytes) {
+      throw new Error(`queue task too large (${encoded.bytes} bytes gzipped > ${this.maxTaskBytes})`);
+    }
     const task: PersistedUpdateTask = {
       kind: "update",
       id: crypto.randomUUID(),
@@ -214,7 +254,7 @@ export class DurableUpdateQueue {
       createdAt: now.toISOString(),
       attempt: 0,
       nextRunAt: Date.now(),
-      messages: req.messages ?? [],
+      messages_gzip_base64: encoded.b64,
     };
 
     // File name includes key hash so it is filesystem safe and stable.
@@ -363,10 +403,11 @@ export class DurableUpdateQueue {
     try {
       const attempt = Math.max(1, (task.attempt ?? 0) + 1);
       task.attempt = attempt;
+      const messages = decodeMessages(task);
       const result = await this.updater.update({
         namespace: task.namespace,
         sessionId: task.sessionId,
-        messages: task.messages ?? [],
+        messages,
       });
       if (result.status === "error") {
         throw new Error(result.error ?? "update returned error");

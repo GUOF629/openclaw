@@ -77,6 +77,7 @@ async function main() {
     retryMaxMs: cfg.QUEUE_RETRY_MAX_MS,
     keepDone: cfg.QUEUE_KEEP_DONE,
     retentionDays: cfg.QUEUE_RETENTION_DAYS,
+    maxTaskBytes: cfg.QUEUE_MAX_TASK_BYTES,
   });
   await updateQueue.init();
 

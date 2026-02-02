@@ -28,6 +28,7 @@ describe("DurableUpdateQueue", () => {
       retryMaxMs: 50,
       keepDone: true,
       retentionDays: 1,
+      maxTaskBytes: 1024 * 1024,
     });
     await queue.init();
 
@@ -57,6 +58,7 @@ describe("DurableUpdateQueue", () => {
       retryMaxMs: 50,
       keepDone: false,
       retentionDays: 1,
+      maxTaskBytes: 1024 * 1024,
     });
     await q1.init();
     await q1.enqueue({ namespace: "default", sessionId: "s1", messages: [{ role: "user", content: "hi" }] });
@@ -95,6 +97,7 @@ describe("DurableUpdateQueue", () => {
       retryMaxMs: 50,
       keepDone: false,
       retentionDays: 1,
+      maxTaskBytes: 1024 * 1024,
     });
     await q2.init();
     const pending = await fs.readdir(pendingDir);

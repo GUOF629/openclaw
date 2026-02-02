@@ -3,6 +3,10 @@ import { z } from "zod";
 const EnvSchema = z.object({
   PORT: z.coerce.number().int().positive().default(8088),
   HOST: z.string().default("0.0.0.0"),
+  API_KEY: z.string().optional(),
+  REQUIRE_API_KEY: z.coerce.boolean().default(false),
+  MAX_BODY_BYTES: z.coerce.number().int().positive().default(256 * 1024),
+  MAX_UPDATE_BODY_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024),
 
   // Qdrant
   QDRANT_URL: z.string().default("http://qdrant:6333"),
@@ -29,6 +33,7 @@ const EnvSchema = z.object({
   QUEUE_RETRY_MAX_MS: z.coerce.number().int().positive().default(5 * 60_000),
   QUEUE_KEEP_DONE: z.coerce.boolean().default(true),
   QUEUE_RETENTION_DAYS: z.coerce.number().int().positive().default(7),
+  QUEUE_MAX_TASK_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024),
   IMPORTANCE_THRESHOLD: z.coerce.number().min(0).max(1).default(0.5),
   MAX_MEMORIES_PER_UPDATE: z.coerce.number().int().positive().default(20),
   DEDUPE_SCORE: z.coerce.number().min(0).max(1).default(0.92),
