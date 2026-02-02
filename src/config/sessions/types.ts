@@ -76,6 +76,17 @@ export type SessionEntry = {
   compactionCount?: number;
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
+  /**
+   * Deep memory update bookkeeping (external long-term memory service).
+   * These fields are best-effort and safe to delete; they will be rehydrated.
+   */
+  deepMemoryUpdatedAt?: number;
+  /** Last observed transcript byte size (for delta threshold batching). */
+  deepMemoryTranscriptSize?: number;
+  /** Last observed transcript JSONL line count (for delta threshold batching). */
+  deepMemoryTranscriptLines?: number;
+  /** Compaction count when we last enqueued a near-compaction deep memory update. */
+  deepMemoryNearCompactionCount?: number;
   cliSessionIds?: Record<string, string>;
   claudeCliSessionId?: string;
   label?: string;

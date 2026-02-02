@@ -20,6 +20,7 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import { DeepMemoryClient } from "../../deep-memory/client.js";
+import { considerDeepMemoryUpdateForTranscriptDelta } from "../../deep-memory/update-scheduler.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
@@ -451,6 +452,21 @@ export async function runReplyAgent(params: {
       systemPromptReport: runResult.meta.systemPromptReport,
       cliSessionId,
     });
+
+    // Trigger #2 (deep memory): batch background updates by transcript delta thresholds (best-effort).
+    if (!isHeartbeat) {
+      void considerDeepMemoryUpdateForTranscriptDelta({
+        cfg,
+        agentId: followupRun.run.agentId,
+        sessionKey,
+        sessionId: followupRun.run.sessionId,
+        sessionFile: followupRun.run.sessionFile,
+        sessionEntry: activeSessionEntry,
+        storePath,
+      }).catch((err) => {
+        logVerbose(`deep memory delta update scheduling failed: ${String(err)}`);
+      });
+    }
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
