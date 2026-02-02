@@ -1,4 +1,5 @@
 export type RetrieveContextRequest = {
+  namespace?: string;
   user_input: string;
   session_id: string;
   max_memories?: number;
@@ -20,6 +21,7 @@ export type RetrieveContextResponse = {
 };
 
 export type UpdateMemoryIndexRequest = {
+  namespace?: string;
   session_id: string;
   // OpenClaw sends transcript messages (best-effort). We treat as opaque and extract what we can.
   messages: unknown[];

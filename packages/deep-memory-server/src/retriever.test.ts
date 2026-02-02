@@ -13,6 +13,7 @@ describe("DeepMemoryRetriever", () => {
           score: 0.9,
           payload: {
             id: "m1",
+            namespace: "default",
             content: "semantic memory",
             session_id: "s0",
             created_at: "2020-01-01T00:00:00.000Z",
@@ -51,6 +52,7 @@ describe("DeepMemoryRetriever", () => {
     });
 
     const out = await retriever.retrieve({
+      namespace: "default",
       userInput: "x",
       sessionId: "s1",
       maxMemories: 2,

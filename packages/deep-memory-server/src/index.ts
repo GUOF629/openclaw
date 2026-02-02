@@ -69,7 +69,7 @@ async function main() {
     sensitiveFilterEnabled: cfg.SENSITIVE_FILTER_ENABLED,
   });
 
-  // Simple in-process queue (serial by default) + result coalescing by session id.
+  // Simple in-process queue (serial by default) + result coalescing by (namespace, session id).
   const inflightBySession = new Map<string, Promise<UpdateMemoryIndexResponse>>();
   const queue: QueueTask[] = [];
   let active = 0;
@@ -109,8 +109,8 @@ async function main() {
       },
     } as unknown as DeepMemoryRetriever,
     updater,
-    enqueueUpdate: async (sessionId, taskFn) => {
-      const existing = inflightBySession.get(sessionId);
+    enqueueUpdate: async (key, taskFn) => {
+      const existing = inflightBySession.get(key);
       if (existing) {
         return await existing;
       }
@@ -130,12 +130,12 @@ async function main() {
             resolve(result);
             return result;
           } finally {
-            inflightBySession.delete(sessionId);
+            inflightBySession.delete(key);
           }
         });
         runNext();
       });
-      inflightBySession.set(sessionId, promise);
+      inflightBySession.set(key, promise);
       return await promise;
     },
   });

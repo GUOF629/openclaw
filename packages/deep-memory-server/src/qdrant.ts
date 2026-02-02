@@ -2,6 +2,7 @@ import { QdrantClient } from "@qdrant/js-client-rest";
 
 export type QdrantMemoryPayload = {
   id: string;
+  namespace: string;
   content: string;
   session_id: string;
   created_at: string;
@@ -74,12 +75,25 @@ export class QdrantStore {
     vector: number[];
     limit: number;
     minScore: number;
+    namespace?: string;
   }): Promise<Array<{ id: string; score: number; payload?: QdrantMemoryPayload }>> {
     const res = await this.client.search(this.collection, {
       vector: params.vector,
       limit: params.limit,
       with_payload: true,
       score_threshold: params.minScore,
+      ...(params.namespace
+        ? {
+            filter: {
+              must: [
+                {
+                  key: "namespace",
+                  match: { value: params.namespace },
+                },
+              ],
+            },
+          }
+        : {}),
     });
     return res.map((r) => ({
       id: String(r.id),

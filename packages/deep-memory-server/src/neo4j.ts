@@ -28,16 +28,44 @@ export class Neo4jStore {
     }
   }
 
-  async upsertSession(params: { sessionId: string; startTime?: string; endTime?: string; summary?: string }) {
+  private prefix(namespace: string): string {
+    return `${namespace}::`;
+  }
+
+  private sessionNodeId(namespace: string, sessionId: string): string {
+    return `${this.prefix(namespace)}session::${sessionId}`;
+  }
+
+  private topicNodeId(namespace: string, topicName: string): string {
+    return `${this.prefix(namespace)}topic::${topicName}`;
+  }
+
+  private entityNodeId(namespace: string, type: string, name: string): string {
+    return `${this.prefix(namespace)}entity::${type}::${name}`;
+  }
+
+  private eventNodeId(namespace: string, event: ExtractedEvent): string {
+    return `${this.prefix(namespace)}event::${event.type}::${event.timestamp}::${event.summary}`.slice(0, 240);
+  }
+
+  async upsertSession(params: {
+    namespace: string;
+    sessionId: string;
+    startTime?: string;
+    endTime?: string;
+    summary?: string;
+  }) {
     const session = this.driver.session();
     try {
       await session.run(
         `MERGE (s:Session {id: $id})
          ON CREATE SET s.start_time = coalesce($start_time, datetime())
          SET s.end_time = $end_time,
-             s.summary = $summary`,
+             s.summary = $summary,
+             s.namespace = $ns`,
         {
-          id: params.sessionId,
+          id: this.sessionNodeId(params.namespace, params.sessionId),
+          ns: params.namespace,
           start_time: params.startTime ?? null,
           end_time: params.endTime ?? null,
           summary: params.summary ?? null,
@@ -48,19 +76,20 @@ export class Neo4jStore {
     }
   }
 
-  async upsertTopic(topic: ExtractedTopic): Promise<void> {
+  async upsertTopic(params: { namespace: string; topic: ExtractedTopic }): Promise<void> {
     const session = this.driver.session();
     try {
       await session.run(
         `MERGE (t:Topic {id: $id})
-         ON CREATE SET t.name = $name, t.frequency = 0, t.importance = 0
+         ON CREATE SET t.name = $name, t.frequency = 0, t.importance = 0, t.namespace = $ns
          SET t.frequency = coalesce(t.frequency, 0) + $frequency,
              t.importance = greatest(coalesce(t.importance, 0), $importance)`,
         {
-          id: `topic:${topic.name}`,
-          name: topic.name,
-          frequency: topic.frequency,
-          importance: topic.importance,
+          id: this.topicNodeId(params.namespace, params.topic.name),
+          ns: params.namespace,
+          name: params.topic.name,
+          frequency: params.topic.frequency,
+          importance: params.topic.importance,
         },
       );
     } finally {
@@ -68,18 +97,19 @@ export class Neo4jStore {
     }
   }
 
-  async upsertEntity(entity: ExtractedEntity): Promise<void> {
+  async upsertEntity(params: { namespace: string; entity: ExtractedEntity }): Promise<void> {
     const session = this.driver.session();
     try {
       await session.run(
         `MERGE (e:Entity {id: $id})
-         ON CREATE SET e.name = $name, e.type = $type, e.frequency = 0
+         ON CREATE SET e.name = $name, e.type = $type, e.frequency = 0, e.namespace = $ns
          SET e.frequency = coalesce(e.frequency, 0) + $frequency`,
         {
-          id: `entity:${entity.type}:${entity.name}`,
-          name: entity.name,
-          type: entity.type,
-          frequency: entity.frequency,
+          id: this.entityNodeId(params.namespace, params.entity.type, params.entity.name),
+          ns: params.namespace,
+          name: params.entity.name,
+          type: params.entity.type,
+          frequency: params.entity.frequency,
         },
       );
     } finally {
@@ -87,18 +117,19 @@ export class Neo4jStore {
     }
   }
 
-  async upsertEvent(event: ExtractedEvent): Promise<void> {
+  async upsertEvent(params: { namespace: string; event: ExtractedEvent }): Promise<void> {
     const session = this.driver.session();
     try {
       await session.run(
         `MERGE (e:Event {id: $id})
-         ON CREATE SET e.type = $type, e.summary = $summary, e.timestamp = datetime($ts)
+         ON CREATE SET e.type = $type, e.summary = $summary, e.timestamp = datetime($ts), e.namespace = $ns
          SET e.type = $type, e.summary = $summary`,
         {
-          id: `event:${event.type}:${event.timestamp}:${event.summary}`.slice(0, 200),
-          type: event.type,
-          summary: event.summary,
-          ts: event.timestamp,
+          id: this.eventNodeId(params.namespace, params.event),
+          ns: params.namespace,
+          type: params.event.type,
+          summary: params.event.summary,
+          ts: params.event.timestamp,
         },
       );
     } finally {
@@ -106,77 +137,91 @@ export class Neo4jStore {
     }
   }
 
-  eventId(event: ExtractedEvent): string {
-    return `event:${event.type}:${event.timestamp}:${event.summary}`.slice(0, 200);
+  eventId(params: { namespace: string; event: ExtractedEvent }): string {
+    return this.eventNodeId(params.namespace, params.event);
   }
 
-  async linkSessionEvent(params: { sessionId: string; eventId: string }): Promise<void> {
+  async linkSessionEvent(params: { namespace: string; sessionId: string; eventId: string }): Promise<void> {
     const session = this.driver.session();
     try {
       await session.run(
         `MATCH (s:Session {id: $sid})
          MATCH (e:Event {id: $eid})
          MERGE (s)-[:HAS_EVENT]->(e)`,
-        { sid: params.sessionId, eid: params.eventId },
+        { sid: this.sessionNodeId(params.namespace, params.sessionId), eid: params.eventId },
       );
     } finally {
       await session.close();
     }
   }
 
-  async linkEventTopic(params: { eventId: string; topicName: string }): Promise<void> {
+  async linkEventTopic(params: { namespace: string; eventId: string; topicName: string }): Promise<void> {
     const session = this.driver.session();
     try {
       await session.run(
         `MATCH (e:Event {id: $eid})
          MERGE (t:Topic {id: $tid})
-         ON CREATE SET t.name = $name, t.frequency = 0, t.importance = 0
+         ON CREATE SET t.name = $name, t.frequency = 0, t.importance = 0, t.namespace = $ns
          MERGE (e)-[:ABOUT_TOPIC]->(t)`,
-        { eid: params.eventId, tid: `topic:${params.topicName}`, name: params.topicName },
+        { eid: params.eventId, tid: this.topicNodeId(params.namespace, params.topicName), name: params.topicName, ns: params.namespace },
       );
     } finally {
       await session.close();
     }
   }
 
-  async linkEventEntity(params: { eventId: string; entityId: string; entityName: string; entityType: string }): Promise<void> {
+  async linkEventEntity(params: {
+    namespace: string;
+    eventId: string;
+    entityName: string;
+    entityType: string;
+  }): Promise<void> {
     const session = this.driver.session();
     try {
       await session.run(
         `MATCH (e:Event {id: $eid})
          MERGE (x:Entity {id: $xid})
-         ON CREATE SET x.name = $name, x.type = $type, x.frequency = 0
+         ON CREATE SET x.name = $name, x.type = $type, x.frequency = 0, x.namespace = $ns
          MERGE (e)-[:ABOUT_ENTITY]->(x)`,
-        { eid: params.eventId, xid: params.entityId, name: params.entityName, type: params.entityType },
+        {
+          eid: params.eventId,
+          xid: this.entityNodeId(params.namespace, params.entityType, params.entityName),
+          name: params.entityName,
+          type: params.entityType,
+          ns: params.namespace,
+        },
       );
     } finally {
       await session.close();
     }
   }
 
-  async linkSessionTopic(params: { sessionId: string; topicName: string }): Promise<void> {
+  async linkSessionTopic(params: { namespace: string; sessionId: string; topicName: string }): Promise<void> {
     const session = this.driver.session();
     try {
       await session.run(
         `MATCH (s:Session {id: $sid})
          MERGE (t:Topic {id: $tid})
-         ON CREATE SET t.name = $name, t.frequency = 0, t.importance = 0
+         ON CREATE SET t.name = $name, t.frequency = 0, t.importance = 0, t.namespace = $ns
          MERGE (s)-[:CONTAINS]->(t)`,
-        { sid: params.sessionId, tid: `topic:${params.topicName}`, name: params.topicName },
+        { sid: this.sessionNodeId(params.namespace, params.sessionId), tid: this.topicNodeId(params.namespace, params.topicName), name: params.topicName, ns: params.namespace },
       );
     } finally {
       await session.close();
     }
   }
 
-  async linkTopicEntity(params: { topicName: string; entityId: string }): Promise<void> {
+  async linkTopicEntity(params: { namespace: string; topicName: string; entityName: string; entityType: string }): Promise<void> {
     const session = this.driver.session();
     try {
       await session.run(
         `MATCH (t:Topic {id: $tid})
          MATCH (e:Entity {id: $eid})
          MERGE (t)-[:MENTIONS]->(e)`,
-        { tid: `topic:${params.topicName}`, eid: params.entityId },
+        {
+          tid: this.topicNodeId(params.namespace, params.topicName),
+          eid: this.entityNodeId(params.namespace, params.entityType, params.entityName),
+        },
       );
     } finally {
       await session.close();
@@ -184,6 +229,7 @@ export class Neo4jStore {
   }
 
   async upsertMemory(params: {
+    namespace: string;
     id: string;
     memory: CandidateMemory;
     sessionId: string;
@@ -193,15 +239,16 @@ export class Neo4jStore {
       await session.run(
         `MATCH (s:Session {id: $sid})
          MERGE (m:Memory {id: $id})
-         ON CREATE SET m.content = $content, m.importance = $importance, m.created_at = datetime($created_at), m.frequency = 0
+         ON CREATE SET m.content = $content, m.importance = $importance, m.created_at = datetime($created_at), m.frequency = 0, m.namespace = $ns
          SET m.content = $content,
              m.importance = greatest(coalesce(m.importance, 0), $importance),
              m.frequency = coalesce(m.frequency, 0) + 1,
              m.last_seen_at = datetime()
          MERGE (m)-[:FROM_SESSION]->(s)`,
         {
-          sid: params.sessionId,
+          sid: this.sessionNodeId(params.namespace, params.sessionId),
           id: params.id,
+          ns: params.namespace,
           content: params.memory.content,
           importance: params.memory.importance,
           created_at: params.memory.createdAt,
@@ -212,37 +259,43 @@ export class Neo4jStore {
     }
   }
 
-  async linkMemoryTopic(params: { memoryId: string; topicName: string }): Promise<void> {
+  async linkMemoryTopic(params: { namespace: string; memoryId: string; topicName: string }): Promise<void> {
     const session = this.driver.session();
     try {
       await session.run(
         `MATCH (m:Memory {id: $mid})
          MERGE (t:Topic {id: $tid})
-         ON CREATE SET t.name = $name, t.frequency = 0, t.importance = 0
+         ON CREATE SET t.name = $name, t.frequency = 0, t.importance = 0, t.namespace = $ns
          MERGE (m)-[:ABOUT_TOPIC]->(t)`,
-        { mid: params.memoryId, tid: `topic:${params.topicName}`, name: params.topicName },
+        { mid: params.memoryId, tid: this.topicNodeId(params.namespace, params.topicName), name: params.topicName, ns: params.namespace },
       );
     } finally {
       await session.close();
     }
   }
 
-  async linkMemoryEntity(params: { memoryId: string; entityId: string; entityName: string; entityType: string }) {
+  async linkMemoryEntity(params: { namespace: string; memoryId: string; entityName: string; entityType: string }) {
     const session = this.driver.session();
     try {
       await session.run(
         `MATCH (m:Memory {id: $mid})
          MERGE (e:Entity {id: $eid})
-         ON CREATE SET e.name = $name, e.type = $type, e.frequency = 0
+         ON CREATE SET e.name = $name, e.type = $type, e.frequency = 0, e.namespace = $ns
          MERGE (m)-[:ABOUT_ENTITY]->(e)`,
-        { mid: params.memoryId, eid: params.entityId, name: params.entityName, type: params.entityType },
+        {
+          mid: params.memoryId,
+          eid: this.entityNodeId(params.namespace, params.entityType, params.entityName),
+          name: params.entityName,
+          type: params.entityType,
+          ns: params.namespace,
+        },
       );
     } finally {
       await session.close();
     }
   }
 
-  async linkMemoryRelated(params: { fromMemoryId: string; toMemoryId: string; score: number }): Promise<void> {
+  async linkMemoryRelated(params: { namespace: string; fromMemoryId: string; toMemoryId: string; score: number }): Promise<void> {
     const session = this.driver.session();
     try {
       await session.run(
@@ -263,6 +316,7 @@ export class Neo4jStore {
    * Score is heuristic 0..1 based on matched signals.
    */
   async queryRelatedMemories(params: {
+    namespace: string;
     entities: string[];
     topics: string[];
     limit: number;
@@ -270,17 +324,17 @@ export class Neo4jStore {
     const session = this.driver.session();
     try {
       const res = await session.run(
-        `WITH $entities AS entities, $topics AS topics
+        `WITH $entities AS entities, $topics AS topics, $prefix AS prefix
          // Direct links: Memory -> Entity/Topic
          CALL {
-           WITH entities, topics
+           WITH entities, topics, prefix
            MATCH (m:Memory)-[:ABOUT_ENTITY]->(e:Entity)
-           WHERE e.name IN entities
+           WHERE e.name IN entities AND m.id STARTS WITH prefix
            RETURN m, 1.0 AS score
            UNION ALL
-           WITH entities, topics
+           WITH entities, topics, prefix
            MATCH (m:Memory)-[:ABOUT_TOPIC]->(t:Topic)
-           WHERE t.name IN topics
+           WHERE t.name IN topics AND m.id STARTS WITH prefix
            RETURN m, 0.8 AS score
          }
          WITH m, sum(score) AS directScore
@@ -312,6 +366,7 @@ export class Neo4jStore {
         {
           entities: params.entities,
           topics: params.topics,
+          prefix: this.prefix(params.namespace),
           limit: params.limit,
         },
       );

@@ -43,7 +43,11 @@ export class DeepMemoryUpdater {
     this.sensitiveFilterEnabled = params.sensitiveFilterEnabled;
   }
 
-  async update(params: { sessionId: string; messages: unknown[] }): Promise<UpdateMemoryIndexResponse> {
+  async update(params: {
+    namespace: string;
+    sessionId: string;
+    messages: unknown[];
+  }): Promise<UpdateMemoryIndexResponse> {
     const analysis = this.analyzer.analyze({
       sessionId: params.sessionId,
       messages: params.messages,
@@ -52,29 +56,34 @@ export class DeepMemoryUpdater {
     });
 
     // Ensure Session exists.
-    await this.neo4j.upsertSession({ sessionId: params.sessionId });
+    await this.neo4j.upsertSession({ namespace: params.namespace, sessionId: params.sessionId });
     for (const t of analysis.topics) {
-      await this.neo4j.upsertTopic(t);
-      await this.neo4j.linkSessionTopic({ sessionId: params.sessionId, topicName: t.name });
+      await this.neo4j.upsertTopic({ namespace: params.namespace, topic: t });
+      await this.neo4j.linkSessionTopic({ namespace: params.namespace, sessionId: params.sessionId, topicName: t.name });
     }
     for (const e of analysis.entities) {
-      await this.neo4j.upsertEntity(e);
+      await this.neo4j.upsertEntity({ namespace: params.namespace, entity: e });
       for (const t of analysis.topics.slice(0, 5)) {
-        await this.neo4j.linkTopicEntity({ topicName: t.name, entityId: `entity:${e.type}:${e.name}` });
+        await this.neo4j.linkTopicEntity({
+          namespace: params.namespace,
+          topicName: t.name,
+          entityName: e.name,
+          entityType: e.type,
+        });
       }
     }
     for (const ev of analysis.events) {
-      await this.neo4j.upsertEvent(ev);
-      const eventId = this.neo4j.eventId(ev);
-      await this.neo4j.linkSessionEvent({ sessionId: params.sessionId, eventId });
+      await this.neo4j.upsertEvent({ namespace: params.namespace, event: ev });
+      const eventId = this.neo4j.eventId({ namespace: params.namespace, event: ev });
+      await this.neo4j.linkSessionEvent({ namespace: params.namespace, sessionId: params.sessionId, eventId });
       for (const t of analysis.topics.slice(0, 3)) {
-        await this.neo4j.linkEventTopic({ eventId, topicName: t.name });
+        await this.neo4j.linkEventTopic({ namespace: params.namespace, eventId, topicName: t.name });
       }
       const topEntities = analysis.entities.slice(0, 3);
       for (const ent of topEntities) {
         await this.neo4j.linkEventEntity({
+          namespace: params.namespace,
           eventId,
-          entityId: `entity:${ent.type}:${ent.name}`,
           entityName: ent.name,
           entityType: ent.type,
         });
@@ -104,6 +113,7 @@ export class DeepMemoryUpdater {
           vector: vec,
           limit: 1,
           minScore: 0,
+          namespace: params.namespace,
         });
         const best = top[0];
         if (best?.id) {
@@ -127,7 +137,8 @@ export class DeepMemoryUpdater {
       }
 
       const isDuplicate = bestId && bestScore >= this.dedupeScore;
-      const id = isDuplicate ? bestId! : `mem_${stableHash(`${params.sessionId}:${draft.content}`)}`;
+      const rawId = isDuplicate ? bestId! : `mem_${stableHash(`${params.sessionId}:${draft.content}`)}`;
+      const id = rawId.includes("::") ? rawId : `${params.namespace}::${rawId}`;
 
       const mergedEntities = new Set(draft.entities);
       const mergedTopics = new Set(draft.topics);
@@ -155,18 +166,19 @@ export class DeepMemoryUpdater {
       };
 
       await this.neo4j.upsertMemory({
+        namespace: params.namespace,
         id,
         memory: mem,
         sessionId: params.sessionId,
       });
       for (const t of mem.topics) {
-        await this.neo4j.linkMemoryTopic({ memoryId: id, topicName: t });
+        await this.neo4j.linkMemoryTopic({ namespace: params.namespace, memoryId: id, topicName: t });
       }
       for (const name of mem.entities) {
         const type = entityTypeByName.get(name) ?? "other";
         await this.neo4j.linkMemoryEntity({
+          namespace: params.namespace,
           memoryId: id,
-          entityId: `entity:${type}:${name}`,
           entityName: name,
           entityType: type,
         });
@@ -176,6 +188,7 @@ export class DeepMemoryUpdater {
       try {
         const payload: QdrantMemoryPayload = {
           id,
+          namespace: params.namespace,
           content: mem.content,
           session_id: params.sessionId,
           created_at: mem.createdAt,
@@ -197,10 +210,16 @@ export class DeepMemoryUpdater {
             vector: vec,
             limit: Math.max(1, this.relatedTopK + 1),
             minScore: Math.max(this.minSemanticScore, 0.8),
+            namespace: params.namespace,
           });
           for (const hit of hits) {
             if (!hit?.id || hit.id === id) continue;
-            await this.neo4j.linkMemoryRelated({ fromMemoryId: id, toMemoryId: hit.id, score: hit.score ?? 0 });
+            await this.neo4j.linkMemoryRelated({
+              namespace: params.namespace,
+              fromMemoryId: id,
+              toMemoryId: hit.id,
+              score: hit.score ?? 0,
+            });
           }
         } catch {
           // ignore

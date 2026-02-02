@@ -7,12 +7,14 @@ import type { DeepMemoryUpdater } from "./updater.js";
 import { extractHintsFromText } from "./analyzer.js";
 
 const RetrieveSchema = z.object({
+  namespace: z.string().optional(),
   user_input: z.string(),
   session_id: z.string(),
   max_memories: z.number().int().positive().optional(),
 });
 
 const UpdateSchema = z.object({
+  namespace: z.string().optional(),
   session_id: z.string(),
   messages: z.array(z.unknown()),
   async: z.boolean().optional(),
@@ -23,7 +25,7 @@ export function createApi(params: {
   retriever: DeepMemoryRetriever;
   updater: DeepMemoryUpdater;
   enqueueUpdate: (
-    sessionId: string,
+    key: string,
     task: () => Promise<UpdateMemoryIndexResponse>,
   ) => Promise<UpdateMemoryIndexResponse>;
 }) {
@@ -38,9 +40,11 @@ export function createApi(params: {
       return c.json({ error: "invalid_request", details: parsed.error.issues }, 400);
     }
     const req = parsed.data;
+    const namespace = req.namespace?.trim() || "default";
     const maxMemories = req.max_memories ?? 10;
     const hints = extractHintsFromText(req.user_input);
     const out: RetrieveContextResponse = await params.retriever.retrieve({
+      namespace,
       userInput: req.user_input,
       sessionId: req.session_id,
       maxMemories,
@@ -57,11 +61,13 @@ export function createApi(params: {
       return c.json({ error: "invalid_request", details: parsed.error.issues }, 400);
     }
     const req = parsed.data;
+    const namespace = req.namespace?.trim() || "default";
     const runAsync = req.async ?? true;
+    const queueKey = `${namespace}::${req.session_id}`;
 
     if (runAsync) {
-      void params.enqueueUpdate(req.session_id, async () =>
-        await params.updater.update({ sessionId: req.session_id, messages: req.messages }),
+      void params.enqueueUpdate(queueKey, async () =>
+        await params.updater.update({ namespace, sessionId: req.session_id, messages: req.messages }),
       );
       const resp: UpdateMemoryIndexResponse = {
         status: "queued",
@@ -71,8 +77,8 @@ export function createApi(params: {
       return c.json(resp);
     }
 
-    const result = await params.enqueueUpdate(req.session_id, async () =>
-      await params.updater.update({ sessionId: req.session_id, messages: req.messages }),
+    const result = await params.enqueueUpdate(queueKey, async () =>
+      await params.updater.update({ namespace, sessionId: req.session_id, messages: req.messages }),
     );
     return c.json(result);
   });

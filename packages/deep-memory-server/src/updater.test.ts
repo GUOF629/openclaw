@@ -61,9 +61,10 @@ describe("DeepMemoryUpdater", () => {
         return [{ id: "mem_existing", score: 0.95, payload: undefined }];
       },
       getMemory: async () => ({
-        id: "mem_existing",
+        id: "default::mem_existing",
         payload: {
-          id: "mem_existing",
+          id: "default::mem_existing",
+          namespace: "default",
           content: "old",
           session_id: "s0",
           created_at: "2020-01-01T00:00:00.000Z",
@@ -112,7 +113,7 @@ describe("DeepMemoryUpdater", () => {
       sensitiveFilterEnabled: true,
     });
 
-    const out = await updater.update({ sessionId: "s1", messages: [] });
+    const out = await updater.update({ namespace: "default", sessionId: "s1", messages: [] });
 
     // We should store 2 memories: the "important" one and the "very important duplicate".
     expect(out.memories_added).toBe(2);
@@ -120,9 +121,10 @@ describe("DeepMemoryUpdater", () => {
 
     // One of the upserts should target the deduped existing id.
     const ids = qdrantUpserts.map((u) => u.id);
-    expect(ids).toContain("mem_existing");
+    expect(ids).toContain("default::mem_existing");
 
-    const existingPayload = qdrantUpserts.find((u) => u.id === "mem_existing")!.payload;
+    const existingPayload = qdrantUpserts.find((u) => u.id === "default::mem_existing")!.payload;
+    expect(existingPayload.namespace).toBe("default");
     expect(existingPayload.frequency).toBe(4);
   });
 });

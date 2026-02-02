@@ -58,6 +58,7 @@ export class DeepMemoryRetriever {
   }
 
   async retrieve(params: {
+    namespace: string;
     userInput: string;
     sessionId: string;
     maxMemories: number;
@@ -109,6 +110,7 @@ export class DeepMemoryRetriever {
         vector: vec,
         limit: candidates,
         minScore: this.minSemanticScore,
+        namespace: params.namespace,
       });
       for (const hit of hits) {
         const payload = hit.payload;
@@ -135,6 +137,7 @@ export class DeepMemoryRetriever {
     // Neo4j relation retrieval (best-effort).
     try {
       const related = await this.neo4j.queryRelatedMemories({
+        namespace: params.namespace,
         entities: params.entities,
         topics: params.topics,
         limit: candidates,
