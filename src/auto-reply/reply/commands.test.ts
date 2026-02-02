@@ -130,6 +130,118 @@ describe("handleCommands gating", () => {
   });
 });
 
+describe("handleCommands /forget", () => {
+  it("returns elevated-required message when elevated is blocked", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          deepMemory: { enabled: true, baseUrl: "http://deep-memory.test", timeoutSeconds: 2 },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildParams("/forget", cfg);
+    params.agentId = "main";
+    params.elevated = {
+      enabled: true,
+      allowed: false,
+      failures: [{ gate: "allowFrom", key: "tools.elevated.allowFrom.whatsapp" }],
+    };
+    // oxlint-disable-next-line typescript/no-explicit-any
+    params.sessionEntry = { sessionId: "sess-1", updatedAt: Date.now() } as any;
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("/forget 需要 elevated");
+  });
+
+  it("calls deep-memory-server /forget in dry-run mode by default", async () => {
+    let seenBody: Record<string, unknown> | null = null;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/forget")) {
+        seenBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+      }
+      return new Response(
+        JSON.stringify({
+          status: "dry_run",
+          namespace: "default",
+          delete_ids: 0,
+          delete_session: 1,
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    });
+
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          deepMemory: { enabled: true, baseUrl: "http://deep-memory.test", timeoutSeconds: 2 },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildParams("/forget", cfg);
+    params.agentId = "main";
+    // oxlint-disable-next-line typescript/no-explicit-any
+    params.sessionEntry = { sessionId: "sess-1", updatedAt: Date.now() } as any;
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("dry-run");
+    expect(seenBody).toEqual(
+      expect.objectContaining({
+        namespace: "default",
+        session_id: "sess-1",
+        dry_run: true,
+      }),
+    );
+  });
+
+  it("executes /forget when confirm is provided", async () => {
+    let seenBody: Record<string, unknown> | null = null;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/forget")) {
+        seenBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+      }
+      return new Response(
+        JSON.stringify({ status: "processed", namespace: "default", deleted: 3 }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    });
+
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          deepMemory: { enabled: true, baseUrl: "http://deep-memory.test", timeoutSeconds: 2 },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildParams("/forget confirm", cfg);
+    params.agentId = "main";
+    // oxlint-disable-next-line typescript/no-explicit-any
+    params.sessionEntry = { sessionId: "sess-1", updatedAt: Date.now() } as any;
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("processed");
+    expect(seenBody).toEqual(
+      expect.objectContaining({
+        session_id: "sess-1",
+        dry_run: false,
+      }),
+    );
+  });
+});
+
 describe("handleCommands bash alias", () => {
   it("routes !poll through the /bash handler", async () => {
     resetBashChatCommandForTests();

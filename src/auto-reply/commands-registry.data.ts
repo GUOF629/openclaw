@@ -189,6 +189,14 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "management",
     }),
     defineChatCommand({
+      key: "forget",
+      nativeName: "forget",
+      description: "Delete deep memory by session or memory id (admin).",
+      textAlias: "/forget",
+      acceptsArgs: true,
+      category: "management",
+    }),
+    defineChatCommand({
       key: "context",
       nativeName: "context",
       description: "Explain how context is built and used.",

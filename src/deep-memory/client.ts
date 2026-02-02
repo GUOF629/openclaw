@@ -20,6 +20,17 @@ export type DeepMemoryUpdateResponse = {
   memories_filtered?: number;
 };
 
+export type DeepMemoryForgetResponse = {
+  status?: string;
+  namespace?: string;
+  deleted?: number;
+  delete_ids?: number;
+  delete_session?: number;
+  error?: string;
+  // oxlint-disable-next-line typescript/no-explicit-any
+  details?: any;
+};
+
 type CacheEntry<T> = { value: T; expiresAt: number };
 
 export class DeepMemoryClient {
@@ -145,6 +156,26 @@ export class DeepMemoryClient {
     } catch (err) {
       log.warn(`update_memory_index failed: ${String(err)}`);
       return {};
+    }
+  }
+
+  async forget(params: {
+    sessionId?: string;
+    memoryIds?: string[];
+    dryRun: boolean;
+  }): Promise<{ ok: true; value: DeepMemoryForgetResponse } | { ok: false; error: string }> {
+    try {
+      const value = await this.postJson<DeepMemoryForgetResponse>("/forget", {
+        namespace: this.namespace,
+        session_id: params.sessionId,
+        memory_ids: params.memoryIds,
+        dry_run: params.dryRun,
+      });
+      return { ok: true, value };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`forget failed: ${message}`);
+      return { ok: false, error: message };
     }
   }
 }
