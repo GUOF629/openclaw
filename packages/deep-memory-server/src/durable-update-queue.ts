@@ -88,6 +88,21 @@ async function readJson<T>(filePath: string): Promise<T> {
   return JSON.parse(raw) as T;
 }
 
+function sanitizeFailedTask(task: PersistedUpdateTask, file: string) {
+  return {
+    file,
+    key: task.key,
+    namespace: task.namespace,
+    sessionId: task.sessionId,
+    transcriptHash: task.transcriptHash,
+    messageCount: task.messageCount,
+    createdAt: task.createdAt,
+    attempt: task.attempt ?? 0,
+    nextRunAt: task.nextRunAt,
+    lastError: task.lastError,
+  };
+}
+
 export class DurableUpdateQueue {
   private readonly log: Logger;
   private readonly updater: DeepMemoryUpdater;
@@ -233,6 +248,41 @@ export class DurableUpdateQueue {
     return out;
   }
 
+  async exportFailed(params: {
+    file?: string;
+    key?: string;
+    limit: number;
+  }): Promise<{ mode: "file"; item: ReturnType<typeof sanitizeFailedTask> } | { mode: "list"; items: Array<ReturnType<typeof sanitizeFailedTask>> } | { mode: "empty" }> {
+    const file = params.file?.trim();
+    if (file) {
+      const name = path.basename(file);
+      const filePath = path.join(this.failedDir, name);
+      try {
+        const task = await readJson<PersistedUpdateTask>(filePath);
+        if (!task || task.kind !== "update") return { mode: "empty" };
+        return { mode: "file", item: sanitizeFailedTask(task, name) };
+      } catch {
+        return { mode: "empty" };
+      }
+    }
+    const key = params.key?.trim();
+    const names = await fs.readdir(this.failedDir).catch(() => []);
+    const items: Array<ReturnType<typeof sanitizeFailedTask>> = [];
+    for (const name of names) {
+      const filePath = path.join(this.failedDir, name);
+      try {
+        const task = await readJson<PersistedUpdateTask>(filePath);
+        if (!task || task.kind !== "update") continue;
+        if (key && task.key !== key) continue;
+        items.push(sanitizeFailedTask(task, name));
+        if (items.length >= Math.max(1, params.limit)) break;
+      } catch {
+        // ignore
+      }
+    }
+    return { mode: "list", items };
+  }
+
   async retryFailed(params: { file: string }): Promise<{ status: "requeued" | "not_found" }> {
     const name = path.basename(params.file);
     const from = path.join(this.failedDir, name);
@@ -258,6 +308,34 @@ export class DurableUpdateQueue {
     } catch {
       return { status: "not_found" };
     }
+  }
+
+  async retryFailedByKey(params: { key: string; limit: number; dryRun: boolean }): Promise<{ status: "ok"; matched: number; retried: number }> {
+    const key = params.key.trim();
+    if (!key) return { status: "ok", matched: 0, retried: 0 };
+    const names = await fs.readdir(this.failedDir).catch(() => []);
+    let matched = 0;
+    let retried = 0;
+    for (const name of names) {
+      const filePath = path.join(this.failedDir, name);
+      try {
+        const task = await readJson<PersistedUpdateTask>(filePath);
+        if (!task || task.kind !== "update") continue;
+        if (task.key !== key) continue;
+        matched += 1;
+        if (params.dryRun) {
+          continue;
+        }
+        const out = await this.retryFailed({ file: name });
+        if (out.status === "requeued") {
+          retried += 1;
+        }
+        if (retried >= Math.max(1, params.limit)) break;
+      } catch {
+        // ignore
+      }
+    }
+    return { status: "ok", matched, retried };
   }
 
   async cancelBySession(params: { namespace: string; sessionId: string }): Promise<number> {

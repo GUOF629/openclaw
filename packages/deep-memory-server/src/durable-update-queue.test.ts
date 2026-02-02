@@ -103,5 +103,118 @@ describe("DurableUpdateQueue", () => {
     const pending = await fs.readdir(pendingDir);
     expect(pending.some((n) => n === "fake.json")).toBe(true);
   });
+
+  it("exports failed tasks without messages", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "deepmem-queue-"));
+    const log = pino({ level: "silent" });
+    const updater = { update: async () => ({ status: "processed", memories_added: 1, memories_filtered: 0 }) };
+    const q = new DurableUpdateQueue({
+      log,
+      updater: updater as any,
+      concurrency: 1,
+      dir,
+      maxAttempts: 1,
+      retryBaseMs: 10,
+      retryMaxMs: 50,
+      keepDone: false,
+      retentionDays: 1,
+      maxTaskBytes: 1024 * 1024,
+    });
+    await q.init();
+
+    const failedDir = path.join(dir, "failed");
+    await fs.writeFile(
+      path.join(failedDir, "x.json"),
+      JSON.stringify({
+        kind: "update",
+        id: "x",
+        key: "default::s1",
+        namespace: "default",
+        sessionId: "s1",
+        transcriptHash: "h",
+        messageCount: 1,
+        createdAt: new Date().toISOString(),
+        attempt: 10,
+        nextRunAt: Date.now(),
+        lastError: "boom",
+        messages_gzip_base64: "H4sIAAAAAAAAAwMAAAAAAAAAAAA=", // gzipped empty payload placeholder
+      }),
+      "utf8",
+    );
+
+    const out = await q.exportFailed({ limit: 10 });
+    expect(out.mode).toBe("list");
+    if (out.mode === "list") {
+      expect(out.items[0]!.file).toBe("x.json");
+      expect((out.items[0] as any).messages).toBeUndefined();
+      expect(out.items[0]!.lastError).toBe("boom");
+    }
+  });
+
+  it("retries failed tasks by key with limit", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "deepmem-queue-"));
+    const log = pino({ level: "silent" });
+    const updater = { update: async () => ({ status: "processed", memories_added: 1, memories_filtered: 0 }) };
+    const q = new DurableUpdateQueue({
+      log,
+      updater: updater as any,
+      concurrency: 1,
+      dir,
+      maxAttempts: 1,
+      retryBaseMs: 10,
+      retryMaxMs: 50,
+      keepDone: false,
+      retentionDays: 1,
+      maxTaskBytes: 1024 * 1024,
+    });
+    await q.init();
+
+    const failedDir = path.join(dir, "failed");
+    const pendingDir = path.join(dir, "pending");
+    const now = Date.now();
+    await fs.writeFile(
+      path.join(failedDir, "a.json"),
+      JSON.stringify({
+        kind: "update",
+        id: "a",
+        key: "default::s1",
+        namespace: "default",
+        sessionId: "s1",
+        transcriptHash: "h1",
+        messageCount: 1,
+        createdAt: new Date().toISOString(),
+        attempt: 10,
+        nextRunAt: now,
+        lastError: "boom",
+        messages_gzip_base64: "H4sIAAAAAAAAAwMAAAAAAAAAAAA=",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(failedDir, "b.json"),
+      JSON.stringify({
+        kind: "update",
+        id: "b",
+        key: "default::s1",
+        namespace: "default",
+        sessionId: "s1",
+        transcriptHash: "h2",
+        messageCount: 1,
+        createdAt: new Date().toISOString(),
+        attempt: 10,
+        nextRunAt: now,
+        lastError: "boom",
+        messages_gzip_base64: "H4sIAAAAAAAAAwMAAAAAAAAAAAA=",
+      }),
+      "utf8",
+    );
+
+    const out = await q.retryFailedByKey({ key: "default::s1", limit: 1, dryRun: false });
+    expect(out.matched).toBeGreaterThanOrEqual(1);
+    expect(out.retried).toBe(1);
+
+    const pending = await fs.readdir(pendingDir);
+    expect(pending.length).toBe(1);
+  });
 });
 

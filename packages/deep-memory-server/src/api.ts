@@ -209,6 +209,25 @@ export function createApi(params: {
     return c.json({ ok: true, items });
   });
 
+  app.get("/queue/failed/export", async (c) => {
+    const file = c.req.query("file") ?? undefined;
+    const key = c.req.query("key") ?? undefined;
+    const limitRaw = c.req.query("limit");
+    const limit = Math.max(1, Math.min(200, Number(limitRaw ?? 50) || 50));
+    const out = await params.queue.exportFailed({ file, key, limit });
+    await appendAuditLog(params.cfg, {
+      action: "queue_failed_export",
+      file: file?.trim() || undefined,
+      key: key?.trim() || undefined,
+      limit,
+      requester: {
+        ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? undefined,
+        userAgent: c.req.header("user-agent") ?? undefined,
+      },
+    }).catch(() => {});
+    return c.json({ ok: true, ...out });
+  });
+
   app.post("/queue/failed/retry", async (c) => {
     const body = await readJsonWithLimit<Record<string, unknown>>(c, {
       limitBytes: params.cfg.MAX_BODY_BYTES,
@@ -217,12 +236,51 @@ export function createApi(params: {
     if (typeof body === "object" && body && "error" in body) {
       return c.json(body, body.error === "payload_too_large" ? 413 : 400);
     }
-    const file = typeof (body as any).file === "string" ? (body as any).file : "";
-    if (!file) {
-      return c.json({ error: "invalid_request" }, 400);
+    const file = typeof (body as any).file === "string" ? ((body as any).file as string) : "";
+    const key = typeof (body as any).key === "string" ? ((body as any).key as string) : "";
+    const dryRun = Boolean((body as any).dry_run);
+    const limit = Math.max(1, Math.min(200, Number((body as any).limit ?? 50) || 50));
+    if (file) {
+      if (dryRun) {
+        await appendAuditLog(params.cfg, {
+          action: "queue_failed_retry",
+          dryRun: true,
+          file,
+          requester: {
+            ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? undefined,
+            userAgent: c.req.header("user-agent") ?? undefined,
+          },
+        }).catch(() => {});
+        return c.json({ ok: true, mode: "file", status: "dry_run" });
+      }
+      const out = await params.queue.retryFailed({ file });
+      await appendAuditLog(params.cfg, {
+        action: "queue_failed_retry",
+        dryRun: false,
+        file,
+        requester: {
+          ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? undefined,
+          userAgent: c.req.header("user-agent") ?? undefined,
+        },
+      }).catch(() => {});
+      return c.json({ ok: true, mode: "file", ...out });
     }
-    const out = await params.queue.retryFailed({ file });
-    return c.json({ ok: true, ...out });
+    if (key) {
+      const out = await params.queue.retryFailedByKey({ key, limit, dryRun });
+      await appendAuditLog(params.cfg, {
+        action: "queue_failed_retry",
+        dryRun,
+        key,
+        limit,
+        retried: out.retried,
+        requester: {
+          ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? undefined,
+          userAgent: c.req.header("user-agent") ?? undefined,
+        },
+      }).catch(() => {});
+      return c.json({ ok: true, mode: "key", ...out });
+    }
+    return c.json({ error: "invalid_request" }, 400);
   });
 
   return app;

@@ -3,7 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DeepMemoryServerConfig } from "./config.js";
 
-export type ForgetAuditEntry = {
+export type AuditRequester = {
+  ip?: string;
+  userAgent?: string;
+};
+
+type ForgetAuditEntry = {
   id: string;
   ts: string;
   action: "forget";
@@ -12,22 +17,48 @@ export type ForgetAuditEntry = {
   sessionId?: string;
   memoryIdsCount: number;
   deletedReported?: number;
-  requester: {
-    ip?: string;
-    userAgent?: string;
-  };
+  requester: AuditRequester;
 };
+
+type QueueFailedExportAuditEntry = {
+  id: string;
+  ts: string;
+  action: "queue_failed_export";
+  file?: string;
+  key?: string;
+  limit?: number;
+  requester: AuditRequester;
+};
+
+type QueueFailedRetryAuditEntry = {
+  id: string;
+  ts: string;
+  action: "queue_failed_retry";
+  dryRun: boolean;
+  file?: string;
+  key?: string;
+  limit?: number;
+  retried?: number;
+  requester: AuditRequester;
+};
+
+export type AuditEntry = ForgetAuditEntry | QueueFailedExportAuditEntry | QueueFailedRetryAuditEntry;
+
+export type AuditEntryInput =
+  | Omit<ForgetAuditEntry, "id" | "ts">
+  | Omit<QueueFailedExportAuditEntry, "id" | "ts">
+  | Omit<QueueFailedRetryAuditEntry, "id" | "ts">;
 
 async function ensureParent(filePath: string) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
 }
 
-export async function appendAuditLog(cfg: DeepMemoryServerConfig, entry: Omit<ForgetAuditEntry, "id" | "ts">) {
+export async function appendAuditLog(cfg: DeepMemoryServerConfig, entry: AuditEntryInput) {
   const filePath = cfg.AUDIT_LOG_PATH?.trim();
   if (!filePath) {
     return;
   }
-  const line: ForgetAuditEntry = {
+  const line: AuditEntry = {
     id: crypto.randomUUID(),
     ts: new Date().toISOString(),
     ...entry,

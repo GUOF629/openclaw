@@ -23,6 +23,8 @@ describe("API auth", () => {
         stats: () => ({ pendingApprox: 0, active: 0, inflightKeys: 0 }),
         listFailed: async () => [],
         retryFailed: async () => ({ status: "not_found" }),
+        exportFailed: async () => ({ mode: "empty" }),
+        retryFailedByKey: async () => ({ status: "ok", matched: 0, retried: 0 }),
       } as any,
     });
 
@@ -55,6 +57,8 @@ describe("API auth", () => {
         stats: () => ({ pendingApprox: 0, active: 0, inflightKeys: 0 }),
         listFailed: async () => [],
         retryFailed: async () => ({ status: "not_found" }),
+        exportFailed: async () => ({ mode: "empty" }),
+        retryFailedByKey: async () => ({ status: "ok", matched: 0, retried: 0 }),
       } as any,
     });
 
@@ -87,6 +91,8 @@ describe("API auth", () => {
         stats: () => ({ pendingApprox: 0, active: 0, inflightKeys: 0 }),
         listFailed: async () => [],
         retryFailed: async () => ({ status: "not_found" }),
+        exportFailed: async () => ({ mode: "empty" }),
+        retryFailedByKey: async () => ({ status: "ok", matched: 0, retried: 0 }),
       } as any,
     });
 
