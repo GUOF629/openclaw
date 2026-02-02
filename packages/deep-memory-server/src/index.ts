@@ -10,6 +10,7 @@ import { DeepMemoryUpdater } from "./updater.js";
 import { SessionAnalyzer } from "./analyzer.js";
 import { createApi } from "./api.js";
 import type { UpdateMemoryIndexResponse } from "./types.js";
+import type { RetrieveContextResponse } from "./types.js";
 
 type QueueTask = () => Promise<UpdateMemoryIndexResponse>;
 
@@ -77,7 +78,7 @@ async function main() {
   };
 
   // Retrieve cache (server-side): best-effort; client-side cache exists too.
-  const retrieveCache = new LRUCache<string, unknown>({
+  const retrieveCache = new LRUCache<string, Promise<RetrieveContextResponse>>({
     max: cfg.RETRIEVE_CACHE_MAX,
     ttl: cfg.RETRIEVE_CACHE_TTL_MS,
   });
@@ -86,11 +87,11 @@ async function main() {
     cfg,
     retriever: {
       ...retriever,
-      retrieve: async (params) => {
+      retrieve: async (params: Parameters<DeepMemoryRetriever["retrieve"]>[0]) => {
         const key = `${params.sessionId}::${params.maxMemories}::${params.userInput.trim()}`;
-        const cached = retrieveCache.get(key) as ReturnType<typeof retriever.retrieve> | undefined;
+        const cached = retrieveCache.get(key);
         if (cached) {
-          return (await cached) as any;
+          return await cached;
         }
         const promise = retriever.retrieve(params);
         retrieveCache.set(key, promise);

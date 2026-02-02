@@ -32,17 +32,32 @@ export class DeepMemoryRetriever {
     const relationWeight = 0.4;
 
     const candidates = Math.min(50, Math.max(10, params.maxMemories * 5));
-    const resultsById = new Map<
-      string,
-      {
-        id: string;
-        content: string;
-        importance: number;
-        semantic?: number;
-        relation?: number;
-        sources: Set<"qdrant" | "neo4j">;
+    type Merged = {
+      id: string;
+      content: string;
+      importance: number;
+      semantic: number;
+      relation: number;
+      sources: Set<"qdrant" | "neo4j">;
+    };
+    const resultsById = new Map<string, Merged>();
+
+    const getOrInit = (id: string, seed: { content: string; importance: number }): Merged => {
+      const existing = resultsById.get(id);
+      if (existing) {
+        return existing;
       }
-    >();
+      const created: Merged = {
+        id,
+        content: seed.content,
+        importance: seed.importance,
+        semantic: 0,
+        relation: 0,
+        sources: new Set(),
+      };
+      resultsById.set(id, created);
+      return created;
+    };
 
     // Qdrant semantic retrieval (best-effort).
     try {
@@ -57,21 +72,14 @@ export class DeepMemoryRetriever {
         if (!payload?.content) {
           continue;
         }
-        const existing =
-          resultsById.get(hit.id) ??
-          ({
-            id: hit.id,
-            content: payload.content,
-            importance: payload.importance ?? 0,
-            sources: new Set(),
-          } as const);
-        resultsById.set(hit.id, {
-          ...existing,
-          content: existing.content || payload.content,
-          importance: Math.max(existing.importance ?? 0, payload.importance ?? 0),
-          semantic: Math.max(existing.semantic ?? 0, hit.score ?? 0),
-          sources: new Set([...existing.sources, "qdrant"]),
+        const existing = getOrInit(hit.id, {
+          content: payload.content,
+          importance: payload.importance ?? 0,
         });
+        existing.content = existing.content || payload.content;
+        existing.importance = Math.max(existing.importance ?? 0, payload.importance ?? 0);
+        existing.semantic = Math.max(existing.semantic ?? 0, hit.score ?? 0);
+        existing.sources.add("qdrant");
       }
     } catch {
       // ignore; handled by fallback path
@@ -85,21 +93,11 @@ export class DeepMemoryRetriever {
         limit: candidates,
       });
       for (const r of related) {
-        const existing =
-          resultsById.get(r.id) ??
-          ({
-            id: r.id,
-            content: r.content,
-            importance: r.importance,
-            sources: new Set(),
-          } as const);
-        resultsById.set(r.id, {
-          ...existing,
-          content: existing.content || r.content,
-          importance: Math.max(existing.importance ?? 0, r.importance ?? 0),
-          relation: Math.max(existing.relation ?? 0, r.relationScore ?? 0),
-          sources: new Set([...existing.sources, "neo4j"]),
-        });
+        const existing = getOrInit(r.id, { content: r.content, importance: r.importance });
+        existing.content = existing.content || r.content;
+        existing.importance = Math.max(existing.importance ?? 0, r.importance ?? 0);
+        existing.relation = Math.max(existing.relation ?? 0, r.relationScore ?? 0);
+        existing.sources.add("neo4j");
       }
     } catch {
       // ignore
