@@ -415,6 +415,7 @@ export const DeepMemorySchema = z
   .object({
     enabled: z.boolean().optional(),
     namespace: z.string().optional(),
+    apiKey: z.string().optional(),
     baseUrl: z.string().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     retrieve: z

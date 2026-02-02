@@ -252,6 +252,7 @@ export async function runReplyAgent(params: {
       timeoutMs: deepMemoryCfg.timeoutMs,
       cache: deepMemoryCfg.retrieve.cache,
       namespace: deepMemoryCfg.namespace,
+      apiKey: deepMemoryCfg.apiKey,
     });
     const retrieved = await client.retrieveContext({
       userInput: deepMemoryUserInput,

@@ -30,12 +30,14 @@ export class DeepMemoryClient {
   private readonly cacheMaxEntries: number;
   private readonly cache = new Map<string, CacheEntry<DeepMemoryRetrieveResponse>>();
   private readonly namespace?: string;
+  private readonly apiKey?: string;
 
   constructor(params: {
     baseUrl: string;
     timeoutMs: number;
     cache: { enabled: boolean; ttlMs: number; maxEntries: number };
     namespace?: string;
+    apiKey?: string;
   }) {
     this.baseUrl = params.baseUrl.replace(/\/+$/, "");
     this.timeoutMs = params.timeoutMs;
@@ -43,6 +45,7 @@ export class DeepMemoryClient {
     this.cacheTtlMs = params.cache.ttlMs;
     this.cacheMaxEntries = params.cache.maxEntries;
     this.namespace = params.namespace?.trim() || undefined;
+    this.apiKey = params.apiKey?.trim() || undefined;
   }
 
   private pruneCache(): void {
@@ -76,7 +79,10 @@ export class DeepMemoryClient {
     try {
       const res = await fetch(url, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(this.apiKey ? { "x-api-key": this.apiKey } : {}),
+        },
         body: JSON.stringify(body ?? {}),
         signal: ctrl.signal,
       });

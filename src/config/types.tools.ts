@@ -341,6 +341,8 @@ export type DeepMemoryConfig = {
    * instances share the same deep-memory-server + stores.
    */
   namespace?: string;
+  /** Optional shared secret for deep-memory-server (sent as x-api-key). */
+  apiKey?: string;
   /** Base URL for the deep memory service (e.g. http://127.0.0.1:8088). */
   baseUrl?: string;
   /** Timeout for deep memory HTTP calls (seconds). */

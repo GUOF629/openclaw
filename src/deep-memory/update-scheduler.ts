@@ -140,6 +140,7 @@ async function runUpdateNow(params: {
     timeoutMs: deepCfg.timeoutMs,
     cache: deepCfg.retrieve.cache,
     namespace: deepCfg.namespace,
+    apiKey: deepCfg.apiKey,
   });
   const messages = readSessionMessages(params.sessionId, params.storePath, params.sessionFile);
   const bounded = capArrayByJsonBytes(messages, UPDATE_PAYLOAD_MAX_BYTES).items;
