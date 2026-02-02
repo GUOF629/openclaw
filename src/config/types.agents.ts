@@ -6,7 +6,7 @@ import type {
   SandboxDockerSettings,
   SandboxPruneSettings,
 } from "./types.sandbox.js";
-import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
+import type { AgentToolsConfig, DeepMemoryConfig, MemorySearchConfig } from "./types.tools.js";
 
 export type AgentModelConfig =
   | string
@@ -25,6 +25,7 @@ export type AgentConfig = {
   agentDir?: string;
   model?: AgentModelConfig;
   memorySearch?: MemorySearchConfig;
+  deepMemory?: DeepMemoryConfig;
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
   /** Optional per-agent heartbeat overrides. */
