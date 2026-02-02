@@ -1,6 +1,11 @@
-import { pipeline, type FeatureExtractionPipeline } from "@xenova/transformers";
+import { pipeline } from "@xenova/transformers";
 
-let pipe: FeatureExtractionPipeline | null = null;
+type FeatureExtractor = (
+  text: string,
+  params: { pooling: "mean"; normalize: boolean },
+) => Promise<unknown>;
+
+let pipe: FeatureExtractor | null = null;
 
 export class EmbeddingModel {
   private readonly modelId: string;
