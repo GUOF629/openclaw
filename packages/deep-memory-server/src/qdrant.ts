@@ -103,5 +103,29 @@ export class QdrantStore {
       payload: (r.payload as QdrantMemoryPayload | undefined) ?? undefined,
     }));
   }
+
+  async deleteByIds(params: { ids: string[] }): Promise<number> {
+    const ids = params.ids.filter(Boolean);
+    if (ids.length === 0) {
+      return 0;
+    }
+    await this.client.delete(this.collection, {
+      wait: true,
+      points: ids,
+    });
+    return ids.length;
+  }
+
+  async deleteBySession(params: { namespace: string; sessionId: string }): Promise<void> {
+    await this.client.delete(this.collection, {
+      wait: true,
+      filter: {
+        must: [
+          { key: "namespace", match: { value: params.namespace } },
+          { key: "session_id", match: { value: params.sessionId } },
+        ],
+      },
+    });
+  }
 }
 

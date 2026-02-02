@@ -432,5 +432,44 @@ export class Neo4jStore {
       await session.close();
     }
   }
+
+  async deleteMemoriesByIds(params: { namespace: string; ids: string[] }): Promise<number> {
+    const ids = params.ids.filter((id) => id.startsWith(this.prefix(params.namespace)));
+    if (ids.length === 0) {
+      return 0;
+    }
+    const session = this.driver.session();
+    try {
+      const res = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.id IN $ids
+         DETACH DELETE m
+         RETURN count(*) AS deleted`,
+        { ids },
+      );
+      const row = res.records[0];
+      const deleted = row ? Number(row.get("deleted") ?? 0) : 0;
+      return Number.isFinite(deleted) ? deleted : 0;
+    } finally {
+      await session.close();
+    }
+  }
+
+  async deleteMemoriesBySession(params: { namespace: string; sessionId: string }): Promise<number> {
+    const session = this.driver.session();
+    try {
+      const res = await session.run(
+        `MATCH (m:Memory)-[:FROM_SESSION]->(s:Session {id: $sid})
+         DETACH DELETE m
+         RETURN count(*) AS deleted`,
+        { sid: this.sessionNodeId(params.namespace, params.sessionId) },
+      );
+      const row = res.records[0];
+      const deleted = row ? Number(row.get("deleted") ?? 0) : 0;
+      return Number.isFinite(deleted) ? deleted : 0;
+    } finally {
+      await session.close();
+    }
+  }
 }
 

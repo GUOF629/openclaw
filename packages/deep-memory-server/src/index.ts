@@ -98,7 +98,7 @@ async function main() {
     retriever: {
       ...retriever,
       retrieve: async (params: Parameters<DeepMemoryRetriever["retrieve"]>[0]) => {
-        const key = `${params.sessionId}::${params.maxMemories}::${params.userInput.trim()}`;
+        const key = `${params.namespace}::${params.sessionId}::${params.maxMemories}::${params.userInput.trim()}`;
         const cached = retrieveCache.get(key);
         if (cached) {
           return await cached;
@@ -109,6 +109,8 @@ async function main() {
       },
     } as unknown as DeepMemoryRetriever,
     updater,
+    qdrant,
+    neo4j,
     enqueueUpdate: async (key, taskFn) => {
       const existing = inflightBySession.get(key);
       if (existing) {
