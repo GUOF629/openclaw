@@ -3,6 +3,11 @@ import { QdrantClient } from "@qdrant/js-client-rest";
 export type QdrantMemoryPayload = {
   id: string;
   namespace: string;
+  kind?: string;
+  memory_key?: string;
+  subject?: string;
+  expires_at?: string;
+  confidence?: number;
   content: string;
   session_id: string;
   source_transcript_hash?: string;

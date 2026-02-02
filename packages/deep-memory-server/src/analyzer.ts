@@ -1,4 +1,4 @@
-import type { CandidateMemoryDraft, ExtractedEntity, ExtractedEvent, ExtractedTopic } from "./types.js";
+import type { CandidateMemoryDraft, ExtractedEntity, ExtractedEvent, ExtractedTopic, MemoryKind } from "./types.js";
 import { safeTrim, stableHash } from "./utils.js";
 
 type TranscriptMessage = {
@@ -131,6 +131,54 @@ export function extractHintsFromText(input: string): { entities: string[]; topic
   return { entities, topics };
 }
 
+function detectMemoryKind(text: string): MemoryKind {
+  const t = text.toLowerCase();
+  if (/临时|本次|仅本次|only this time|temporary/.test(t)) return "ephemeral";
+  if (/todo|待办|下一步|接下来|需要完成|计划|task/.test(t)) return "task";
+  if (/偏好|喜欢|讨厌|不喜欢|习惯|prefer|preference|like|hate/.test(t)) return "preference";
+  if (/规则|约定|必须|务必|不要|永远|policy|rule|must|never|always/.test(t)) return "rule";
+  return "fact";
+}
+
+function guessSubject(entities: ExtractedEntity[], topics: ExtractedTopic[]): string | undefined {
+  const e = entities[0]?.name?.trim();
+  if (e) return e;
+  const t = topics[0]?.name?.trim();
+  return t || undefined;
+}
+
+function guessMemoryKey(kind: MemoryKind, subject: string | undefined, content: string): string | undefined {
+  if (!subject) {
+    return kind === "rule" ? "rule:general" : undefined;
+  }
+  // Best-effort slotting: kind + subject + a tiny hint.
+  const hint =
+    kind === "preference"
+      ? "preference"
+      : kind === "rule"
+        ? "rule"
+        : kind === "task"
+          ? "task"
+          : kind;
+  const key = `${hint}:${subject}`.toLowerCase();
+  // Prevent extremely long keys.
+  return key.length > 120 ? `${hint}:${stableHash(key)}` : key;
+}
+
+function guessExpiresAt(kind: MemoryKind, text: string, now: Date): string | undefined {
+  if (kind !== "ephemeral") {
+    return undefined;
+  }
+  const t = text.toLowerCase();
+  const base = now.getTime();
+  const dayMs = 24 * 3600_000;
+  // Very rough TTL hints.
+  if (/今天|today/.test(t)) return new Date(base + dayMs).toISOString();
+  if (/本周|this week|一周|7天/.test(t)) return new Date(base + 7 * dayMs).toISOString();
+  if (/本月|this month|30天/.test(t)) return new Date(base + 30 * dayMs).toISOString();
+  return new Date(base + 7 * dayMs).toISOString();
+}
+
 export class SessionAnalyzer {
   analyze(params: {
     sessionId: string;
@@ -221,7 +269,17 @@ export class SessionAnalyzer {
       if (!content || content.length < 20) {
         continue;
       }
+      const kind = detectMemoryKind(content);
+      const subject = guessSubject(entities, topics);
+      const memoryKey = guessMemoryKey(kind, subject, content);
+      const expiresAt = guessExpiresAt(kind, content, now);
+      const confidence = Math.max(0, Math.min(1, 0.4 + 0.6 * intent));
       candidates.push({
+        kind,
+        subject,
+        memoryKey,
+        expiresAt,
+        confidence,
         content,
         entities: entities.map((e) => e.name).slice(0, 5),
         topics: topics.map((t) => t.name).slice(0, 5),
@@ -235,7 +293,9 @@ export class SessionAnalyzer {
     }
     for (const ev of events) {
       const content = `Event(${ev.type}): ${ev.summary}`;
+      const kind: MemoryKind = "fact";
       candidates.push({
+        kind,
         content,
         entities: entities.map((e) => e.name).slice(0, 5),
         topics: topics.map((t) => t.name).slice(0, 5),

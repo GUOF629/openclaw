@@ -171,12 +171,33 @@ export class DeepMemoryUpdater {
           if (p?.topics) p.topics.forEach((t) => mergedTopics.add(t));
           mergedImportance = Math.max(mergedImportance, p?.importance ?? 0);
           mergedFrequency = (p?.frequency ?? 1) + 1;
+          // Preserve durable classification/slotting if present.
+          if (!draft.memoryKey && p?.memory_key) {
+            draft.memoryKey = p.memory_key;
+          }
+          if (!draft.subject && p?.subject) {
+            draft.subject = p.subject;
+          }
+          if (!draft.kind && p?.kind) {
+            draft.kind = p.kind as any;
+          }
+          if (!draft.expiresAt && p?.expires_at) {
+            draft.expiresAt = p.expires_at;
+          }
+          if (typeof draft.confidence !== "number" && typeof p?.confidence === "number") {
+            draft.confidence = p.confidence;
+          }
         } catch {
           // ignore
         }
       }
 
       const mem = {
+        kind: draft.kind ?? "fact",
+        memoryKey: draft.memoryKey,
+        subject: draft.subject,
+        expiresAt: draft.expiresAt,
+        confidence: draft.confidence,
         content: draft.content,
         importance: mergedImportance,
         entities: Array.from(mergedEntities).slice(0, 10),
@@ -208,6 +229,11 @@ export class DeepMemoryUpdater {
         const payload: QdrantMemoryPayload = {
           id,
           namespace: params.namespace,
+          kind: mem.kind,
+          memory_key: mem.memoryKey,
+          subject: mem.subject,
+          expires_at: mem.expiresAt,
+          confidence: mem.confidence,
           content: mem.content,
           session_id: params.sessionId,
           source_transcript_hash: transcriptHash,

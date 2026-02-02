@@ -292,6 +292,11 @@ export class Neo4jStore {
          ON CREATE SET m.content = $content, m.importance = $importance, m.created_at = datetime($created_at), m.frequency = 0, m.namespace = $ns
          SET m.content = $content,
              m.importance = greatest(coalesce(m.importance, 0), $importance),
+             m.kind = $kind,
+             m.memory_key = $memory_key,
+             m.subject = $subject,
+             m.confidence = $confidence,
+             m.expires_at = CASE WHEN $expires_at IS NULL THEN NULL ELSE datetime($expires_at) END,
              m.frequency = coalesce(m.frequency, 0) + 1,
              m.last_seen_at = datetime()
          MERGE (m)-[:FROM_SESSION]->(s)`,
@@ -302,6 +307,11 @@ export class Neo4jStore {
           content: params.memory.content,
           importance: params.memory.importance,
           created_at: params.memory.createdAt,
+          kind: params.memory.kind,
+          memory_key: params.memory.memoryKey ?? null,
+          subject: params.memory.subject ?? null,
+          confidence: typeof params.memory.confidence === "number" ? params.memory.confidence : null,
+          expires_at: params.memory.expiresAt ?? null,
         },
       );
     } finally {
@@ -370,7 +380,21 @@ export class Neo4jStore {
     entities: string[];
     topics: string[];
     limit: number;
-  }): Promise<Array<{ id: string; content: string; importance: number; frequency: number; lastSeenAt: string; relationScore: number }>> {
+  }): Promise<
+    Array<{
+      id: string;
+      content: string;
+      importance: number;
+      frequency: number;
+      lastSeenAt: string;
+      relationScore: number;
+      kind?: string;
+      memoryKey?: string;
+      subject?: string;
+      expiresAt?: string;
+      confidence?: number;
+    }>
+  > {
     const session = this.driver.session();
     try {
       const res = await session.run(
@@ -410,6 +434,11 @@ export class Neo4jStore {
                 coalesce(m.importance, 0.0) AS importance,
                 coalesce(m.frequency, 0) AS frequency,
                 toString(coalesce(m.last_seen_at, m.created_at)) AS lastSeenAt,
+                toString(coalesce(m.expires_at, "")) AS expiresAt,
+                coalesce(m.kind, "") AS kind,
+                coalesce(m.memory_key, "") AS memoryKey,
+                coalesce(m.subject, "") AS subject,
+                coalesce(m.confidence, 0.0) AS confidence,
                 least(1.0, rawScore / 2.0) AS relationScore
          ORDER BY relationScore DESC, importance DESC
          LIMIT $limit`,
@@ -426,6 +455,11 @@ export class Neo4jStore {
         importance: Number(r.get("importance") ?? 0),
         frequency: Number(r.get("frequency") ?? 0),
         lastSeenAt: String(r.get("lastSeenAt") ?? ""),
+        expiresAt: String(r.get("expiresAt") ?? "") || undefined,
+        kind: String(r.get("kind") ?? "") || undefined,
+        memoryKey: String(r.get("memoryKey") ?? "") || undefined,
+        subject: String(r.get("subject") ?? "") || undefined,
+        confidence: Number(r.get("confidence") ?? 0) || undefined,
         relationScore: Number(r.get("relationScore") ?? 0),
       }));
     } finally {

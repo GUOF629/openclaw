@@ -59,7 +59,18 @@ export type ExtractedEvent = {
   timestamp: string; // ISO string
 };
 
+export type MemoryKind = "rule" | "preference" | "fact" | "task" | "ephemeral";
+
 export type CandidateMemory = {
+  kind: MemoryKind;
+  /** Optional canonical slot/key for conflict resolution (e.g. preference:timezone). */
+  memoryKey?: string;
+  /** Optional short subject label (best-effort). */
+  subject?: string;
+  /** Optional ISO expiration timestamp for ephemeral memories. */
+  expiresAt?: string;
+  /** 0..1 confidence (heuristic, best-effort). */
+  confidence?: number;
   content: string;
   importance: number;
   entities: string[];
@@ -68,6 +79,11 @@ export type CandidateMemory = {
 };
 
 export type CandidateMemoryDraft = {
+  kind?: MemoryKind;
+  memoryKey?: string;
+  subject?: string;
+  expiresAt?: string;
+  confidence?: number;
   content: string;
   entities: string[];
   topics: string[];

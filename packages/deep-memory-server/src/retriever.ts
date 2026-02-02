@@ -75,6 +75,11 @@ export class DeepMemoryRetriever {
       importance: number;
       frequency: number;
       lastSeenAt?: string;
+      kind?: string;
+      memoryKey?: string;
+      subject?: string;
+      expiresAt?: string;
+      confidence?: number;
       semantic: number;
       relation: number;
       sources: Set<"qdrant" | "neo4j">;
@@ -83,7 +88,17 @@ export class DeepMemoryRetriever {
 
     const getOrInit = (
       id: string,
-      seed: { content: string; importance: number; frequency?: number; lastSeenAt?: string },
+      seed: {
+        content: string;
+        importance: number;
+        frequency?: number;
+        lastSeenAt?: string;
+        kind?: string;
+        memoryKey?: string;
+        subject?: string;
+        expiresAt?: string;
+        confidence?: number;
+      },
     ): Merged => {
       const existing = resultsById.get(id);
       if (existing) {
@@ -95,6 +110,11 @@ export class DeepMemoryRetriever {
         importance: seed.importance,
         frequency: seed.frequency ?? 0,
         lastSeenAt: seed.lastSeenAt,
+        kind: seed.kind,
+        memoryKey: seed.memoryKey,
+        subject: seed.subject,
+        expiresAt: seed.expiresAt,
+        confidence: seed.confidence,
         semantic: 0,
         relation: 0,
         sources: new Set(),
@@ -122,6 +142,11 @@ export class DeepMemoryRetriever {
           importance: payload.importance ?? 0,
           frequency: payload.frequency ?? 0,
           lastSeenAt: payload.updated_at ?? payload.created_at,
+          kind: payload.kind,
+          memoryKey: payload.memory_key,
+          subject: payload.subject,
+          expiresAt: payload.expires_at,
+          confidence: payload.confidence,
         });
         existing.content = existing.content || payload.content;
         existing.importance = Math.max(existing.importance ?? 0, payload.importance ?? 0);
@@ -148,6 +173,11 @@ export class DeepMemoryRetriever {
           importance: r.importance,
           frequency: r.frequency,
           lastSeenAt: r.lastSeenAt,
+          kind: r.kind,
+          memoryKey: r.memoryKey,
+          subject: r.subject,
+          expiresAt: r.expiresAt,
+          confidence: r.confidence,
         });
         existing.content = existing.content || r.content;
         existing.importance = Math.max(existing.importance ?? 0, r.importance ?? 0);
@@ -160,7 +190,15 @@ export class DeepMemoryRetriever {
       // ignore
     }
 
+    const now = Date.now();
+    const isExpired = (expiresAt?: string) => {
+      if (!expiresAt) return false;
+      const t = Date.parse(expiresAt);
+      return Number.isFinite(t) && t > 0 && t < now;
+    };
+
     const merged = Array.from(resultsById.values())
+      .filter((r) => !isExpired(r.expiresAt))
       .map((r) => {
         const semantic = r.semantic ?? 0;
         const relation = r.relation ?? 0;
@@ -178,13 +216,35 @@ export class DeepMemoryRetriever {
           relevance: final,
           semantic_score: r.semantic,
           relation_score: r.relation,
+          kind: r.kind,
+          memory_key: r.memoryKey,
+          subject: r.subject,
           sources: Array.from(r.sources),
         };
       })
+      .sort((a, b) => b.relevance - a.relevance);
+
+    // Conflict resolution: group by memory_key (slot) and pick the best per group.
+    const byKey = new Map<string, (typeof merged)[number]>();
+    for (const m of merged) {
+      const k = m.memory_key ?? m.id;
+      const prev = byKey.get(k);
+      if (!prev) {
+        byKey.set(k, m);
+        continue;
+      }
+      // Prefer higher relevance; tie-break by importance.
+      if (m.relevance > prev.relevance) {
+        byKey.set(k, m);
+      } else if (m.relevance === prev.relevance && (m.importance ?? 0) > (prev.importance ?? 0)) {
+        byKey.set(k, m);
+      }
+    }
+    const resolved = Array.from(byKey.values())
       .sort((a, b) => b.relevance - a.relevance)
       .slice(0, params.maxMemories);
 
-    const contextLines = merged.map((m, idx) => {
+    const contextLines = resolved.map((m, idx) => {
       const score = m.relevance.toFixed(2);
       const imp = m.importance.toFixed(2);
       return `${idx + 1}. (${score}, imp=${imp}) ${m.content}`;
@@ -193,7 +253,15 @@ export class DeepMemoryRetriever {
     return {
       entities: params.entities,
       topics: params.topics,
-      memories: merged,
+      memories: resolved.map((m) => ({
+        id: m.id,
+        content: m.content,
+        importance: m.importance,
+        relevance: m.relevance,
+        semantic_score: m.semantic_score,
+        relation_score: m.relation_score,
+        sources: m.sources,
+      })),
       context: contextLines.length ? `Relevant long-term memory:\n${contextLines.join("\n")}` : "",
     };
   }
