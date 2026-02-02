@@ -205,22 +205,33 @@ export class Neo4jStore {
     try {
       const res = await session.run(
         `WITH $entities AS entities, $topics AS topics
-         MATCH (m:Memory)
-         OPTIONAL MATCH (m)-[:ABOUT_ENTITY]->(e:Entity)
-         OPTIONAL MATCH (m)-[:ABOUT_TOPIC]->(t:Topic)
+         // Direct links: Memory -> Entity/Topic
+         CALL {
+           WITH entities, topics
+           MATCH (m:Memory)-[:ABOUT_ENTITY]->(e:Entity)
+           WHERE e.name IN entities
+           RETURN m, 1.0 AS score
+           UNION ALL
+           WITH entities, topics
+           MATCH (m:Memory)-[:ABOUT_TOPIC]->(t:Topic)
+           WHERE t.name IN topics
+           RETURN m, 0.8 AS score
+         }
+         WITH m, sum(score) AS directScore
+         // Two-hop: Memory->Topic->Entity or Memory->Entity<-MENTIONS-Topic
+         CALL {
+           WITH m, entities, topics
+           OPTIONAL MATCH (m:Memory)-[:ABOUT_TOPIC]->(t:Topic)-[:MENTIONS]->(e:Entity)
+           WHERE e.name IN entities
+           RETURN coalesce(count(e), 0) AS hopHits
+         }
+         WITH m, directScore, hopHits
          WITH m,
-              collect(DISTINCT e.name) AS enames,
-              collect(DISTINCT t.name) AS tnames
-         WITH m, enames, tnames,
-              size([x IN enames WHERE x IN entities]) AS entityHits,
-              size([x IN tnames WHERE x IN topics]) AS topicHits
-         WITH m, entityHits, topicHits,
-              (CASE WHEN entityHits + topicHits = 0 THEN 0.0
-                    ELSE (toFloat(entityHits) * 0.7 + toFloat(topicHits) * 0.3) / toFloat(entityHits + topicHits)
-               END) AS score
-         WHERE score > 0
-         RETURN m.id AS id, m.content AS content, coalesce(m.importance, 0.0) AS importance, score AS relationScore
-         ORDER BY score DESC, importance DESC
+              (directScore + toFloat(hopHits) * 0.4) AS rawScore
+         WHERE rawScore > 0
+         RETURN m.id AS id, m.content AS content, coalesce(m.importance, 0.0) AS importance,
+                least(1.0, rawScore / 2.0) AS relationScore
+         ORDER BY relationScore DESC, importance DESC
          LIMIT $limit`,
         {
           entities: params.entities,

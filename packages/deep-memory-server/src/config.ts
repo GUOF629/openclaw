@@ -10,6 +10,8 @@ const EnvSchema = z.object({
   QDRANT_COLLECTION: z.string().default("openclaw_memories"),
   VECTOR_DIMS: z.coerce.number().int().positive().default(384),
   MIN_SEMANTIC_SCORE: z.coerce.number().min(0).max(1).default(0.6),
+  SEMANTIC_WEIGHT: z.coerce.number().min(0).max(1).default(0.6),
+  RELATION_WEIGHT: z.coerce.number().min(0).max(1).default(0.4),
 
   // Neo4j
   NEO4J_URI: z.string().default("bolt://neo4j:7687"),
@@ -21,6 +23,9 @@ const EnvSchema = z.object({
   RETRIEVE_CACHE_TTL_MS: z.coerce.number().int().nonnegative().default(5 * 60_000),
   RETRIEVE_CACHE_MAX: z.coerce.number().int().positive().default(500),
   UPDATE_CONCURRENCY: z.coerce.number().int().positive().default(1),
+  IMPORTANCE_THRESHOLD: z.coerce.number().min(0).max(1).default(0.5),
+  MAX_MEMORIES_PER_UPDATE: z.coerce.number().int().positive().default(20),
+  DEDUPE_SCORE: z.coerce.number().min(0).max(1).default(0.92),
 
   // Embeddings
   EMBEDDING_MODEL: z.string().default("Xenova/bge-small-en-v1.5")

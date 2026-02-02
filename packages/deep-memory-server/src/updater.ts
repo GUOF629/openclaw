@@ -11,6 +11,9 @@ export class DeepMemoryUpdater {
   private readonly qdrant: QdrantStore;
   private readonly neo4j: Neo4jStore;
   private readonly minSemanticScore: number;
+  private readonly importanceThreshold: number;
+  private readonly maxMemoriesPerUpdate: number;
+  private readonly dedupeScore: number;
 
   constructor(params: {
     analyzer: SessionAnalyzer;
@@ -18,20 +21,26 @@ export class DeepMemoryUpdater {
     qdrant: QdrantStore;
     neo4j: Neo4jStore;
     minSemanticScore: number;
+    importanceThreshold: number;
+    maxMemoriesPerUpdate: number;
+    dedupeScore: number;
   }) {
     this.analyzer = params.analyzer;
     this.embedder = params.embedder;
     this.qdrant = params.qdrant;
     this.neo4j = params.neo4j;
     this.minSemanticScore = params.minSemanticScore;
+    this.importanceThreshold = params.importanceThreshold;
+    this.maxMemoriesPerUpdate = params.maxMemoriesPerUpdate;
+    this.dedupeScore = params.dedupeScore;
   }
 
   async update(params: { sessionId: string; messages: unknown[] }): Promise<UpdateMemoryIndexResponse> {
     const analysis = this.analyzer.analyze({
       sessionId: params.sessionId,
       messages: params.messages,
-      maxMemoriesPerSession: 20,
-      importanceThreshold: 0.5,
+      maxMemoriesPerSession: this.maxMemoriesPerUpdate,
+      importanceThreshold: this.importanceThreshold,
     });
 
     // Ensure Session exists.
@@ -51,6 +60,10 @@ export class DeepMemoryUpdater {
     }
 
     let added = 0;
+    const entityTypeByName = new Map<string, string>();
+    for (const e of analysis.entities) {
+      entityTypeByName.set(e.name, e.type);
+    }
     for (const mem of analysis.memories) {
       // Dedup across global store via Qdrant similarity.
       const vec = await this.embedder.embed(mem.content);
@@ -59,10 +72,10 @@ export class DeepMemoryUpdater {
         const top = await this.qdrant.search({
           vector: vec,
           limit: 1,
-          minScore: 0.9,
+          minScore: 0,
         });
         const best = top[0];
-        if (best?.id && best.score >= 0.9) {
+        if (best?.id && best.score >= this.dedupeScore) {
           // Treat as duplicate: reuse existing id and "update" importance by re-upserting.
           id = best.id;
         }
@@ -79,7 +92,7 @@ export class DeepMemoryUpdater {
         await this.neo4j.linkMemoryTopic({ memoryId: id, topicName: t });
       }
       for (const name of mem.entities) {
-        const type = "other";
+        const type = entityTypeByName.get(name) ?? "other";
         await this.neo4j.linkMemoryEntity({
           memoryId: id,
           entityId: `entity:${type}:${name}`,

@@ -8,17 +8,24 @@ export class DeepMemoryRetriever {
   private readonly qdrant: QdrantStore;
   private readonly neo4j: Neo4jStore;
   private readonly minSemanticScore: number;
+  private readonly semanticWeight: number;
+  private readonly relationWeight: number;
 
   constructor(params: {
     embedder: EmbeddingModel;
     qdrant: QdrantStore;
     neo4j: Neo4jStore;
     minSemanticScore: number;
+    semanticWeight: number;
+    relationWeight: number;
   }) {
     this.embedder = params.embedder;
     this.qdrant = params.qdrant;
     this.neo4j = params.neo4j;
     this.minSemanticScore = params.minSemanticScore;
+    const sum = Math.max(0, params.semanticWeight) + Math.max(0, params.relationWeight);
+    this.semanticWeight = sum > 0 ? params.semanticWeight / sum : 0.6;
+    this.relationWeight = sum > 0 ? params.relationWeight / sum : 0.4;
   }
 
   async retrieve(params: {
@@ -28,8 +35,8 @@ export class DeepMemoryRetriever {
     entities: string[];
     topics: string[];
   }): Promise<RetrieveContextResponse> {
-    const semanticWeight = 0.6;
-    const relationWeight = 0.4;
+    const semanticWeight = this.semanticWeight;
+    const relationWeight = this.relationWeight;
 
     const candidates = Math.min(50, Math.max(10, params.maxMemories * 5));
     type Merged = {

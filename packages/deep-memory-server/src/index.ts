@@ -50,6 +50,8 @@ async function main() {
     qdrant,
     neo4j,
     minSemanticScore: cfg.MIN_SEMANTIC_SCORE,
+    semanticWeight: cfg.SEMANTIC_WEIGHT,
+    relationWeight: cfg.RELATION_WEIGHT,
   });
   const updater = new DeepMemoryUpdater({
     analyzer: new SessionAnalyzer(),
@@ -57,6 +59,9 @@ async function main() {
     qdrant,
     neo4j,
     minSemanticScore: cfg.MIN_SEMANTIC_SCORE,
+    importanceThreshold: cfg.IMPORTANCE_THRESHOLD,
+    maxMemoriesPerUpdate: cfg.MAX_MEMORIES_PER_UPDATE,
+    dedupeScore: cfg.DEDUPE_SCORE,
   });
 
   // Simple in-process queue (serial by default) + result coalescing by session id.
