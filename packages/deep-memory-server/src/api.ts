@@ -7,6 +7,7 @@ import type { DeepMemoryUpdater } from "./updater.js";
 import { extractHintsFromText } from "./analyzer.js";
 import type { QdrantStore } from "./qdrant.js";
 import type { Neo4jStore } from "./neo4j.js";
+import type { DurableUpdateQueue } from "./durable-update-queue.js";
 
 const RetrieveSchema = z.object({
   namespace: z.string().optional(),
@@ -45,10 +46,7 @@ export function createApi(params: {
   updater: DeepMemoryUpdater;
   qdrant: QdrantStore;
   neo4j: Neo4jStore;
-  enqueueUpdate: (
-    key: string,
-    task: () => Promise<UpdateMemoryIndexResponse>,
-  ) => Promise<UpdateMemoryIndexResponse>;
+  queue: DurableUpdateQueue;
 }) {
   const app = new Hono();
 
@@ -84,12 +82,9 @@ export function createApi(params: {
     const req = parsed.data;
     const namespace = req.namespace?.trim() || "default";
     const runAsync = req.async ?? true;
-    const queueKey = `${namespace}::${req.session_id}`;
 
     if (runAsync) {
-      void params.enqueueUpdate(queueKey, async () =>
-        await params.updater.update({ namespace, sessionId: req.session_id, messages: req.messages }),
-      );
+      void params.queue.enqueue({ namespace, sessionId: req.session_id, messages: req.messages });
       const resp: UpdateMemoryIndexResponse = {
         status: "queued",
         memories_added: 0,
@@ -98,9 +93,7 @@ export function createApi(params: {
       return c.json(resp);
     }
 
-    const result = await params.enqueueUpdate(queueKey, async () =>
-      await params.updater.update({ namespace, sessionId: req.session_id, messages: req.messages }),
-    );
+    const result = await params.queue.runNow({ namespace, sessionId: req.session_id, messages: req.messages });
     return c.json(result);
   });
 
@@ -137,6 +130,9 @@ export function createApi(params: {
       try {
         deleted += await params.neo4j.deleteMemoriesBySession({ namespace, sessionId: req.session_id });
       } catch {}
+      try {
+        await params.queue.cancelBySession({ namespace, sessionId: req.session_id });
+      } catch {}
     }
     if (normalizedIds.length > 0) {
       try {
@@ -147,6 +143,10 @@ export function createApi(params: {
       } catch {}
     }
     return c.json({ status: "processed", namespace, deleted });
+  });
+
+  app.get("/queue/stats", (c) => {
+    return c.json({ ok: true, ...params.queue.stats() });
   });
 
   return app;

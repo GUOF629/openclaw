@@ -9,10 +9,8 @@ import { DeepMemoryRetriever } from "./retriever.js";
 import { DeepMemoryUpdater } from "./updater.js";
 import { SessionAnalyzer } from "./analyzer.js";
 import { createApi } from "./api.js";
-import type { UpdateMemoryIndexResponse } from "./types.js";
+import { DurableUpdateQueue } from "./durable-update-queue.js";
 import type { RetrieveContextResponse } from "./types.js";
-
-type QueueTask = () => Promise<UpdateMemoryIndexResponse>;
 
 async function main() {
   const cfg = loadConfig();
@@ -69,23 +67,18 @@ async function main() {
     sensitiveFilterEnabled: cfg.SENSITIVE_FILTER_ENABLED,
   });
 
-  // Simple in-process queue (serial by default) + result coalescing by (namespace, session id).
-  const inflightBySession = new Map<string, Promise<UpdateMemoryIndexResponse>>();
-  const queue: QueueTask[] = [];
-  let active = 0;
-
-  const runNext = () => {
-    if (active >= cfg.UPDATE_CONCURRENCY) return;
-    const task = queue.shift();
-    if (!task) return;
-    active += 1;
-    void task()
-      .catch(() => ({ status: "error", memories_added: 0, memories_filtered: 0 } as UpdateMemoryIndexResponse))
-      .finally(() => {
-        active -= 1;
-        runNext();
-      });
-  };
+  const updateQueue = new DurableUpdateQueue({
+    log,
+    updater,
+    concurrency: cfg.UPDATE_CONCURRENCY,
+    dir: cfg.QUEUE_DIR,
+    maxAttempts: cfg.QUEUE_MAX_ATTEMPTS,
+    retryBaseMs: cfg.QUEUE_RETRY_BASE_MS,
+    retryMaxMs: cfg.QUEUE_RETRY_MAX_MS,
+    keepDone: cfg.QUEUE_KEEP_DONE,
+    retentionDays: cfg.QUEUE_RETENTION_DAYS,
+  });
+  await updateQueue.init();
 
   // Retrieve cache (server-side): best-effort; client-side cache exists too.
   const retrieveCache = new LRUCache<string, Promise<RetrieveContextResponse>>({
@@ -111,35 +104,7 @@ async function main() {
     updater,
     qdrant,
     neo4j,
-    enqueueUpdate: async (key, taskFn) => {
-      const existing = inflightBySession.get(key);
-      if (existing) {
-        return await existing;
-      }
-      const promise = new Promise<UpdateMemoryIndexResponse>((resolve) => {
-        queue.push(async () => {
-          try {
-            const result = await taskFn();
-            resolve(result);
-            return result;
-          } catch (err) {
-            const result: UpdateMemoryIndexResponse = {
-              status: "error",
-              memories_added: 0,
-              memories_filtered: 0,
-              error: String(err),
-            };
-            resolve(result);
-            return result;
-          } finally {
-            inflightBySession.delete(key);
-          }
-        });
-        runNext();
-      });
-      inflightBySession.set(key, promise);
-      return await promise;
-    },
+    queue: updateQueue,
   });
 
   const server = serve({ fetch: app.fetch, port: cfg.PORT, hostname: cfg.HOST });
@@ -151,6 +116,9 @@ async function main() {
     } catch {}
     try {
       await neo4j.close();
+    } catch {}
+    try {
+      updateQueue.stop();
     } catch {}
   };
   process.on("SIGINT", () => void shutdown().finally(() => process.exit(0)));
