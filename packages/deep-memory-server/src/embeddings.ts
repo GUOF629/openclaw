@@ -37,8 +37,11 @@ export class EmbeddingModel {
     await this.ensureLoaded();
     const result = await pipe!(cleaned, { pooling: "mean", normalize: true });
     // transformers.js may return a nested typed array; normalize to number[]
-    const data = (result as unknown as { data?: Float32Array | number[] }).data;
-    const arr = Array.isArray(data) ? data : data ? Array.from(data) : [];
+    const data =
+      result && typeof result === "object" && "data" in result
+        ? (result as Record<string, unknown>).data
+        : undefined;
+    const arr = Array.isArray(data) ? data : data instanceof Float32Array ? Array.from(data) : [];
     if (arr.length !== this.dims) {
       // Best-effort: pad/truncate to expected dims.
       const out = arr.slice(0, this.dims);
