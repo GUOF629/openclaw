@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { UpdateMemoryIndexResponse } from "./types.js";
 import { SessionAnalyzer } from "./analyzer.js";
 import { EmbeddingModel } from "./embeddings.js";
@@ -48,6 +49,26 @@ export class DeepMemoryUpdater {
     sessionId: string;
     messages: unknown[];
   }): Promise<UpdateMemoryIndexResponse> {
+    const messageCount = Array.isArray(params.messages) ? params.messages.length : 0;
+    const transcriptHash = crypto
+      .createHash("sha256")
+      .update(JSON.stringify(params.messages ?? []))
+      .digest("hex");
+
+    // Ensure Session exists (needed for idempotency meta).
+    await this.neo4j.upsertSession({ namespace: params.namespace, sessionId: params.sessionId });
+    try {
+      const meta = await this.neo4j.getSessionIngestMeta({
+        namespace: params.namespace,
+        sessionId: params.sessionId,
+      });
+      if (meta.transcriptHash === transcriptHash) {
+        return { status: "skipped", memories_added: 0, memories_filtered: 0 };
+      }
+    } catch {
+      // If Neo4j is unavailable, we proceed best-effort (may duplicate).
+    }
+
     const analysis = this.analyzer.analyze({
       sessionId: params.sessionId,
       messages: params.messages,
@@ -55,8 +76,6 @@ export class DeepMemoryUpdater {
       importanceThreshold: this.importanceThreshold,
     });
 
-    // Ensure Session exists.
-    await this.neo4j.upsertSession({ namespace: params.namespace, sessionId: params.sessionId });
     for (const t of analysis.topics) {
       await this.neo4j.upsertTopic({ namespace: params.namespace, topic: t });
       await this.neo4j.linkSessionTopic({ namespace: params.namespace, sessionId: params.sessionId, topicName: t.name });
@@ -191,6 +210,8 @@ export class DeepMemoryUpdater {
           namespace: params.namespace,
           content: mem.content,
           session_id: params.sessionId,
+          source_transcript_hash: transcriptHash,
+          source_message_count: messageCount,
           created_at: mem.createdAt,
           updated_at: nowIso,
           importance: mem.importance,
@@ -227,6 +248,18 @@ export class DeepMemoryUpdater {
       }
 
       added += 1;
+    }
+
+    // Persist idempotency markers (best-effort).
+    try {
+      await this.neo4j.setSessionIngestMeta({
+        namespace: params.namespace,
+        sessionId: params.sessionId,
+        transcriptHash,
+        messageCount,
+      });
+    } catch {
+      // ignore
     }
 
     return {

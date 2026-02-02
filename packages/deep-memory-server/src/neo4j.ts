@@ -76,6 +76,56 @@ export class Neo4jStore {
     }
   }
 
+  async getSessionIngestMeta(params: { namespace: string; sessionId: string }): Promise<{
+    transcriptHash?: string;
+    messageCount?: number;
+  }> {
+    const session = this.driver.session();
+    try {
+      const res = await session.run(
+        `MATCH (s:Session {id: $id})
+         RETURN s.last_transcript_hash AS hash, s.last_message_count AS count`,
+        { id: this.sessionNodeId(params.namespace, params.sessionId) },
+      );
+      const row = res.records[0];
+      if (!row) {
+        return {};
+      }
+      const hash = row.get("hash") as string | null | undefined;
+      const count = row.get("count") as number | null | undefined;
+      return {
+        transcriptHash: typeof hash === "string" && hash.length > 0 ? hash : undefined,
+        messageCount: typeof count === "number" && Number.isFinite(count) ? count : undefined,
+      };
+    } finally {
+      await session.close();
+    }
+  }
+
+  async setSessionIngestMeta(params: {
+    namespace: string;
+    sessionId: string;
+    transcriptHash: string;
+    messageCount: number;
+  }): Promise<void> {
+    const session = this.driver.session();
+    try {
+      await session.run(
+        `MATCH (s:Session {id: $id})
+         SET s.last_transcript_hash = $hash,
+             s.last_message_count = $count,
+             s.last_ingested_at = datetime()`,
+        {
+          id: this.sessionNodeId(params.namespace, params.sessionId),
+          hash: params.transcriptHash,
+          count: params.messageCount,
+        },
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
   async upsertTopic(params: { namespace: string; topic: ExtractedTopic }): Promise<void> {
     const session = this.driver.session();
     try {

@@ -5,6 +5,8 @@ export type QdrantMemoryPayload = {
   namespace: string;
   content: string;
   session_id: string;
+  source_transcript_hash?: string;
+  source_message_count?: number;
   created_at: string;
   updated_at?: string;
   importance: number;
