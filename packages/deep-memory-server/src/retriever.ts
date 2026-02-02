@@ -2,6 +2,7 @@ import type { RetrieveContextResponse } from "./types.js";
 import { EmbeddingModel } from "./embeddings.js";
 import { Neo4jStore } from "./neo4j.js";
 import { QdrantStore } from "./qdrant.js";
+import { clamp } from "./utils.js";
 
 export class DeepMemoryRetriever {
   private readonly embedder: EmbeddingModel;
@@ -10,6 +11,9 @@ export class DeepMemoryRetriever {
   private readonly minSemanticScore: number;
   private readonly semanticWeight: number;
   private readonly relationWeight: number;
+  private readonly decayHalfLifeDays: number;
+  private readonly importanceBoost: number;
+  private readonly frequencyBoost: number;
 
   constructor(params: {
     embedder: EmbeddingModel;
@@ -18,6 +22,9 @@ export class DeepMemoryRetriever {
     minSemanticScore: number;
     semanticWeight: number;
     relationWeight: number;
+    decayHalfLifeDays: number;
+    importanceBoost: number;
+    frequencyBoost: number;
   }) {
     this.embedder = params.embedder;
     this.qdrant = params.qdrant;
@@ -26,6 +33,28 @@ export class DeepMemoryRetriever {
     const sum = Math.max(0, params.semanticWeight) + Math.max(0, params.relationWeight);
     this.semanticWeight = sum > 0 ? params.semanticWeight / sum : 0.6;
     this.relationWeight = sum > 0 ? params.relationWeight / sum : 0.4;
+    this.decayHalfLifeDays = Math.max(1, params.decayHalfLifeDays);
+    this.importanceBoost = Math.max(0, params.importanceBoost);
+    this.frequencyBoost = Math.max(0, params.frequencyBoost);
+  }
+
+  private scoreWithDecay(params: { relevance: number; importance: number; frequency: number; lastSeenAt?: string }): number {
+    const base = Math.max(0, params.relevance);
+    const imp = clamp(params.importance ?? 0, 0, 1);
+    const freq = Math.max(0, params.frequency ?? 0);
+    const freqNorm = clamp(Math.log1p(freq) / Math.log(10), 0, 1); // ~1 at 9+
+    const boost = (1 + this.importanceBoost * imp) * (1 + this.frequencyBoost * freqNorm);
+
+    let decay = 1;
+    if (params.lastSeenAt) {
+      const t = Date.parse(params.lastSeenAt);
+      if (!Number.isNaN(t)) {
+        const ageDays = Math.max(0, (Date.now() - t) / (24 * 3600_000));
+        decay = Math.pow(0.5, ageDays / this.decayHalfLifeDays);
+        decay = clamp(decay, 0.1, 1);
+      }
+    }
+    return base * boost * decay;
   }
 
   async retrieve(params: {
@@ -43,13 +72,18 @@ export class DeepMemoryRetriever {
       id: string;
       content: string;
       importance: number;
+      frequency: number;
+      lastSeenAt?: string;
       semantic: number;
       relation: number;
       sources: Set<"qdrant" | "neo4j">;
     };
     const resultsById = new Map<string, Merged>();
 
-    const getOrInit = (id: string, seed: { content: string; importance: number }): Merged => {
+    const getOrInit = (
+      id: string,
+      seed: { content: string; importance: number; frequency?: number; lastSeenAt?: string },
+    ): Merged => {
       const existing = resultsById.get(id);
       if (existing) {
         return existing;
@@ -58,6 +92,8 @@ export class DeepMemoryRetriever {
         id,
         content: seed.content,
         importance: seed.importance,
+        frequency: seed.frequency ?? 0,
+        lastSeenAt: seed.lastSeenAt,
         semantic: 0,
         relation: 0,
         sources: new Set(),
@@ -82,9 +118,13 @@ export class DeepMemoryRetriever {
         const existing = getOrInit(hit.id, {
           content: payload.content,
           importance: payload.importance ?? 0,
+          frequency: payload.frequency ?? 0,
+          lastSeenAt: payload.updated_at ?? payload.created_at,
         });
         existing.content = existing.content || payload.content;
         existing.importance = Math.max(existing.importance ?? 0, payload.importance ?? 0);
+        existing.frequency = Math.max(existing.frequency ?? 0, payload.frequency ?? 0);
+        existing.lastSeenAt = existing.lastSeenAt ?? (payload.updated_at ?? payload.created_at);
         existing.semantic = Math.max(existing.semantic ?? 0, hit.score ?? 0);
         existing.sources.add("qdrant");
       }
@@ -100,9 +140,16 @@ export class DeepMemoryRetriever {
         limit: candidates,
       });
       for (const r of related) {
-        const existing = getOrInit(r.id, { content: r.content, importance: r.importance });
+        const existing = getOrInit(r.id, {
+          content: r.content,
+          importance: r.importance,
+          frequency: r.frequency,
+          lastSeenAt: r.lastSeenAt,
+        });
         existing.content = existing.content || r.content;
         existing.importance = Math.max(existing.importance ?? 0, r.importance ?? 0);
+        existing.frequency = Math.max(existing.frequency ?? 0, r.frequency ?? 0);
+        existing.lastSeenAt = existing.lastSeenAt ?? r.lastSeenAt;
         existing.relation = Math.max(existing.relation ?? 0, r.relationScore ?? 0);
         existing.sources.add("neo4j");
       }
@@ -115,11 +162,17 @@ export class DeepMemoryRetriever {
         const semantic = r.semantic ?? 0;
         const relation = r.relation ?? 0;
         const relevance = semanticWeight * semantic + relationWeight * relation;
+        const final = this.scoreWithDecay({
+          relevance,
+          importance: r.importance,
+          frequency: r.frequency,
+          lastSeenAt: r.lastSeenAt,
+        });
         return {
           id: r.id,
           content: r.content,
           importance: r.importance,
-          relevance,
+          relevance: final,
           semantic_score: r.semantic,
           relation_score: r.relation,
           sources: Array.from(r.sources),

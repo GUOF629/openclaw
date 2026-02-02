@@ -1,5 +1,4 @@
-import type { CandidateMemory, ExtractedEntity, ExtractedEvent, ExtractedTopic } from "./types.js";
-import { computeImportance } from "./importance.js";
+import type { CandidateMemoryDraft, ExtractedEntity, ExtractedEvent, ExtractedTopic } from "./types.js";
 import { safeTrim, stableHash } from "./utils.js";
 
 type TranscriptMessage = {
@@ -57,6 +56,50 @@ function tokenizeForTopics(text: string): string[] {
   return tokens;
 }
 
+const STOPWORDS = new Set(
+  [
+    // CN
+    "我们",
+    "你们",
+    "他们",
+    "这个",
+    "那个",
+    "然后",
+    "所以",
+    "但是",
+    "如果",
+    "因为",
+    "可以",
+    "需要",
+    "觉得",
+    "现在",
+    "今天",
+    "一下",
+    // EN
+    "the",
+    "and",
+    "or",
+    "to",
+    "of",
+    "in",
+    "on",
+    "for",
+    "with",
+    "is",
+    "are",
+    "be",
+    "this",
+    "that",
+    "we",
+    "you",
+    "they",
+  ].map((s) => s.toLowerCase()),
+);
+
+function filterStopwords(tokens: string[]): string[] {
+  return tokens.filter((t) => !STOPWORDS.has(t.toLowerCase()));
+}
+
 function topKFrequency(tokens: string[], k: number): Array<{ term: string; count: number }> {
   const map = new Map<string, number>();
   for (const t of tokens) {
@@ -66,6 +109,26 @@ function topKFrequency(tokens: string[], k: number): Array<{ term: string; count
     .map(([term, count]) => ({ term, count }))
     .sort((a, b) => b.count - a.count)
     .slice(0, k);
+}
+
+function extractIsoTimestampHint(text: string): string | null {
+  // Basic date patterns: YYYY-MM-DD or YYYY/MM/DD
+  const m = text.match(/\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/);
+  if (!m) {
+    return null;
+  }
+  const yyyy = m[1];
+  const mm = String(Math.max(1, Math.min(12, Number(m[2])))).padStart(2, "0");
+  const dd = String(Math.max(1, Math.min(31, Number(m[3])))).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}T00:00:00.000Z`;
+}
+
+export function extractHintsFromText(input: string): { entities: string[]; topics: string[] } {
+  const tokens = filterStopwords(tokenizeForTopics(input));
+  const top = topKFrequency(tokens, 12);
+  const entities = top.map((t) => t.term).slice(0, 10);
+  const topics = top.map((t) => t.term).slice(0, 10);
+  return { entities, topics };
 }
 
 export class SessionAnalyzer {
@@ -79,7 +142,7 @@ export class SessionAnalyzer {
     entities: ExtractedEntity[];
     topics: ExtractedTopic[];
     events: ExtractedEvent[];
-    memories: CandidateMemory[];
+    drafts: CandidateMemoryDraft[];
     filtered: { added: number; filtered: number };
   } {
     const now = params.now ?? new Date();
@@ -105,10 +168,10 @@ export class SessionAnalyzer {
     }
 
     const joined = collected.map((m) => `${m.role}: ${m.text}`).join("\n");
-    const tokens = tokenizeForTopics(joined);
+    const tokens = filterStopwords(tokenizeForTopics(joined));
 
     // Topics: top frequency tokens (heuristic).
-    const topicTerms = topKFrequency(tokens, 10).filter((t) => t.count >= 2);
+    const topicTerms = topKFrequency(tokens, 12).filter((t) => t.count >= 2);
     const topics: ExtractedTopic[] = topicTerms.map((t) => ({
       name: t.term,
       frequency: t.count,
@@ -116,7 +179,9 @@ export class SessionAnalyzer {
     }));
 
     // Entities: heuristic extraction of "named" terms.
-    const entityCandidates = topKFrequency(tokens, 20).filter((t) => /[A-Za-z]/.test(t.term) || /[\u4e00-\u9fff]/.test(t.term));
+    const entityCandidates = topKFrequency(tokens, 30).filter(
+      (t) => /[A-Za-z]/.test(t.term) || /[\u4e00-\u9fff]/.test(t.term),
+    );
     const entities: ExtractedEntity[] = entityCandidates.slice(0, 10).map((e) => ({
       name: e.term,
       type: guessEntityType(e.term),
@@ -139,82 +204,72 @@ export class SessionAnalyzer {
           events.push({
             type: ep.type,
             summary,
-            timestamp: now.toISOString(),
+            timestamp: extractIsoTimestampHint(msg.text) ?? now.toISOString(),
           });
           break;
         }
       }
     }
 
-    // Candidate memories: pick sentences that look durable (heuristic) + event summaries.
-    const candidates: CandidateMemory[] = [];
+    // Candidate memory drafts: extract durable items, defer importance+novelty to updater.
+    const candidates: CandidateMemoryDraft[] = [];
     for (const msg of collected) {
       const text = msg.text;
       const intent = detectUserIntentScore(text);
-      const novelty = 0.7; // real novelty is computed during storage (Qdrant similarity); keep a prior here.
       const frequency = topicTerms.length > 0 ? topicTerms[0]!.count : 1;
-      const importance = computeImportance({
-        frequency,
-        novelty,
-        user_intent: intent,
-        length: text.length,
-      });
-      if (importance < params.importanceThreshold) {
-        continue;
-      }
       const content = safeTrim(text.replace(/\s+/g, " "));
       if (!content || content.length < 20) {
         continue;
       }
       candidates.push({
         content,
-        importance,
         entities: entities.map((e) => e.name).slice(0, 5),
         topics: topics.map((t) => t.name).slice(0, 5),
-        createdAt: now.toISOString(),
+        createdAt: extractIsoTimestampHint(content) ?? now.toISOString(),
+        signals: {
+          frequency,
+          user_intent: intent,
+          length: content.length,
+        },
       });
     }
     for (const ev of events) {
       const content = `Event(${ev.type}): ${ev.summary}`;
-      const importance = computeImportance({
-        frequency: 2,
-        novelty: 0.8,
-        user_intent: 0.7,
-        length: content.length,
+      candidates.push({
+        content,
+        entities: entities.map((e) => e.name).slice(0, 5),
+        topics: topics.map((t) => t.name).slice(0, 5),
+        createdAt: ev.timestamp,
+        signals: {
+          frequency: 2,
+          user_intent: 0.7,
+          length: content.length,
+        },
       });
-      if (importance >= params.importanceThreshold) {
-        candidates.push({
-          content,
-          importance,
-          entities: entities.map((e) => e.name).slice(0, 5),
-          topics: topics.map((t) => t.name).slice(0, 5),
-          createdAt: ev.timestamp,
-        });
-      }
     }
 
     // Dedup by normalized content hash (in-session).
     const seen = new Set<string>();
-    const memories: CandidateMemory[] = [];
+    const drafts: CandidateMemoryDraft[] = [];
     for (const m of candidates) {
       const key = stableHash(m.content.toLowerCase());
       if (seen.has(key)) {
         continue;
       }
       seen.add(key);
-      memories.push(m);
-      if (memories.length >= params.maxMemoriesPerSession) {
+      drafts.push(m);
+      if (drafts.length >= params.maxMemoriesPerSession) {
         break;
       }
     }
 
-    const filteredCount = Math.max(0, candidates.length - memories.length);
+    const filteredCount = Math.max(0, candidates.length - drafts.length);
     return {
       entities,
       topics,
       events,
-      memories,
-      filtered: { added: memories.length, filtered: filteredCount },
+      drafts,
+      filtered: { added: drafts.length, filtered: filteredCount },
     };
   }
 }

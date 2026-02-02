@@ -106,6 +106,54 @@ export class Neo4jStore {
     }
   }
 
+  eventId(event: ExtractedEvent): string {
+    return `event:${event.type}:${event.timestamp}:${event.summary}`.slice(0, 200);
+  }
+
+  async linkSessionEvent(params: { sessionId: string; eventId: string }): Promise<void> {
+    const session = this.driver.session();
+    try {
+      await session.run(
+        `MATCH (s:Session {id: $sid})
+         MATCH (e:Event {id: $eid})
+         MERGE (s)-[:HAS_EVENT]->(e)`,
+        { sid: params.sessionId, eid: params.eventId },
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
+  async linkEventTopic(params: { eventId: string; topicName: string }): Promise<void> {
+    const session = this.driver.session();
+    try {
+      await session.run(
+        `MATCH (e:Event {id: $eid})
+         MERGE (t:Topic {id: $tid})
+         ON CREATE SET t.name = $name, t.frequency = 0, t.importance = 0
+         MERGE (e)-[:ABOUT_TOPIC]->(t)`,
+        { eid: params.eventId, tid: `topic:${params.topicName}`, name: params.topicName },
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
+  async linkEventEntity(params: { eventId: string; entityId: string; entityName: string; entityType: string }): Promise<void> {
+    const session = this.driver.session();
+    try {
+      await session.run(
+        `MATCH (e:Event {id: $eid})
+         MERGE (x:Entity {id: $xid})
+         ON CREATE SET x.name = $name, x.type = $type, x.frequency = 0
+         MERGE (e)-[:ABOUT_ENTITY]->(x)`,
+        { eid: params.eventId, xid: params.entityId, name: params.entityName, type: params.entityType },
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
   async linkSessionTopic(params: { sessionId: string; topicName: string }): Promise<void> {
     const session = this.driver.session();
     try {
@@ -145,9 +193,11 @@ export class Neo4jStore {
       await session.run(
         `MATCH (s:Session {id: $sid})
          MERGE (m:Memory {id: $id})
-         ON CREATE SET m.content = $content, m.importance = $importance, m.created_at = datetime($created_at)
+         ON CREATE SET m.content = $content, m.importance = $importance, m.created_at = datetime($created_at), m.frequency = 0
          SET m.content = $content,
-             m.importance = greatest(coalesce(m.importance, 0), $importance)
+             m.importance = greatest(coalesce(m.importance, 0), $importance),
+             m.frequency = coalesce(m.frequency, 0) + 1,
+             m.last_seen_at = datetime()
          MERGE (m)-[:FROM_SESSION]->(s)`,
         {
           sid: params.sessionId,
@@ -192,6 +242,22 @@ export class Neo4jStore {
     }
   }
 
+  async linkMemoryRelated(params: { fromMemoryId: string; toMemoryId: string; score: number }): Promise<void> {
+    const session = this.driver.session();
+    try {
+      await session.run(
+        `MATCH (a:Memory {id: $a})
+         MATCH (b:Memory {id: $b})
+         MERGE (a)-[r:RELATED_TO]->(b)
+         SET r.score = greatest(coalesce(r.score, 0), $score),
+             r.updated_at = datetime()`,
+        { a: params.fromMemoryId, b: params.toMemoryId, score: params.score },
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
   /**
    * Relation query: given entities/topics, return related memories and a relationScore.
    * Score is heuristic 0..1 based on matched signals.
@@ -200,7 +266,7 @@ export class Neo4jStore {
     entities: string[];
     topics: string[];
     limit: number;
-  }): Promise<Array<{ id: string; content: string; importance: number; relationScore: number }>> {
+  }): Promise<Array<{ id: string; content: string; importance: number; frequency: number; lastSeenAt: string; relationScore: number }>> {
     const session = this.driver.session();
     try {
       const res = await session.run(
@@ -226,10 +292,20 @@ export class Neo4jStore {
            RETURN coalesce(count(e), 0) AS hopHits
          }
          WITH m, directScore, hopHits
+         // RELATED_TO expansion (synapse links)
+         CALL {
+           WITH m
+           OPTIONAL MATCH (m)-[r:RELATED_TO]->(m2:Memory)
+           RETURN coalesce(max(r.score), 0.0) AS relatedBoost
+         }
          WITH m,
-              (directScore + toFloat(hopHits) * 0.4) AS rawScore
+              (directScore + toFloat(hopHits) * 0.4 + relatedBoost * 0.6) AS rawScore
          WHERE rawScore > 0
-         RETURN m.id AS id, m.content AS content, coalesce(m.importance, 0.0) AS importance,
+         RETURN m.id AS id,
+                m.content AS content,
+                coalesce(m.importance, 0.0) AS importance,
+                coalesce(m.frequency, 0) AS frequency,
+                toString(coalesce(m.last_seen_at, m.created_at)) AS lastSeenAt,
                 least(1.0, rawScore / 2.0) AS relationScore
          ORDER BY relationScore DESC, importance DESC
          LIMIT $limit`,
@@ -243,6 +319,8 @@ export class Neo4jStore {
         id: String(r.get("id")),
         content: String(r.get("content")),
         importance: Number(r.get("importance") ?? 0),
+        frequency: Number(r.get("frequency") ?? 0),
+        lastSeenAt: String(r.get("lastSeenAt") ?? ""),
         relationScore: Number(r.get("relationScore") ?? 0),
       }));
     } finally {

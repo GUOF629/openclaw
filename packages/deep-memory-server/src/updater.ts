@@ -1,9 +1,11 @@
 import type { UpdateMemoryIndexResponse } from "./types.js";
 import { SessionAnalyzer } from "./analyzer.js";
 import { EmbeddingModel } from "./embeddings.js";
+import { computeImportance } from "./importance.js";
 import { Neo4jStore } from "./neo4j.js";
 import { QdrantStore, type QdrantMemoryPayload } from "./qdrant.js";
-import { stableHash } from "./utils.js";
+import { looksSensitive } from "./safety.js";
+import { clamp, stableHash } from "./utils.js";
 
 export class DeepMemoryUpdater {
   private readonly analyzer: SessionAnalyzer;
@@ -14,6 +16,8 @@ export class DeepMemoryUpdater {
   private readonly importanceThreshold: number;
   private readonly maxMemoriesPerUpdate: number;
   private readonly dedupeScore: number;
+  private readonly relatedTopK: number;
+  private readonly sensitiveFilterEnabled: boolean;
 
   constructor(params: {
     analyzer: SessionAnalyzer;
@@ -24,6 +28,8 @@ export class DeepMemoryUpdater {
     importanceThreshold: number;
     maxMemoriesPerUpdate: number;
     dedupeScore: number;
+    relatedTopK: number;
+    sensitiveFilterEnabled: boolean;
   }) {
     this.analyzer = params.analyzer;
     this.embedder = params.embedder;
@@ -33,6 +39,8 @@ export class DeepMemoryUpdater {
     this.importanceThreshold = params.importanceThreshold;
     this.maxMemoriesPerUpdate = params.maxMemoriesPerUpdate;
     this.dedupeScore = params.dedupeScore;
+    this.relatedTopK = Math.max(0, params.relatedTopK);
+    this.sensitiveFilterEnabled = params.sensitiveFilterEnabled;
   }
 
   async update(params: { sessionId: string; messages: unknown[] }): Promise<UpdateMemoryIndexResponse> {
@@ -57,17 +65,40 @@ export class DeepMemoryUpdater {
     }
     for (const ev of analysis.events) {
       await this.neo4j.upsertEvent(ev);
+      const eventId = this.neo4j.eventId(ev);
+      await this.neo4j.linkSessionEvent({ sessionId: params.sessionId, eventId });
+      for (const t of analysis.topics.slice(0, 3)) {
+        await this.neo4j.linkEventTopic({ eventId, topicName: t.name });
+      }
+      const topEntities = analysis.entities.slice(0, 3);
+      for (const ent of topEntities) {
+        await this.neo4j.linkEventEntity({
+          eventId,
+          entityId: `entity:${ent.type}:${ent.name}`,
+          entityName: ent.name,
+          entityType: ent.type,
+        });
+      }
     }
 
     let added = 0;
+    let filtered = analysis.filtered.filtered;
     const entityTypeByName = new Map<string, string>();
     for (const e of analysis.entities) {
       entityTypeByName.set(e.name, e.type);
     }
-    for (const mem of analysis.memories) {
-      // Dedup across global store via Qdrant similarity.
-      const vec = await this.embedder.embed(mem.content);
-      let id = `mem_${stableHash(`${params.sessionId}:${mem.content}`)}`;
+    const nowIso = new Date().toISOString();
+    for (const draft of analysis.drafts) {
+      if (this.sensitiveFilterEnabled && looksSensitive(draft.content)) {
+        filtered += 1;
+        continue;
+      }
+
+      const vec = await this.embedder.embed(draft.content);
+
+      // Novelty + global dedupe (best-effort). If Qdrant is down we fall back to session hash.
+      let bestId: string | null = null;
+      let bestScore = 0;
       try {
         const top = await this.qdrant.search({
           vector: vec,
@@ -75,13 +106,53 @@ export class DeepMemoryUpdater {
           minScore: 0,
         });
         const best = top[0];
-        if (best?.id && best.score >= this.dedupeScore) {
-          // Treat as duplicate: reuse existing id and "update" importance by re-upserting.
-          id = best.id;
+        if (best?.id) {
+          bestId = best.id;
+          bestScore = best.score ?? 0;
         }
       } catch {
-        // If Qdrant is unavailable, we still write Neo4j; vector upsert will be skipped by caller-level fallback.
+        // ignore
       }
+
+      const novelty = clamp(1 - bestScore, 0, 1);
+      const importance = computeImportance({
+        frequency: draft.signals.frequency,
+        novelty,
+        user_intent: draft.signals.user_intent,
+        length: draft.signals.length,
+      });
+      if (importance < this.importanceThreshold) {
+        filtered += 1;
+        continue;
+      }
+
+      const isDuplicate = bestId && bestScore >= this.dedupeScore;
+      const id = isDuplicate ? bestId! : `mem_${stableHash(`${params.sessionId}:${draft.content}`)}`;
+
+      const mergedEntities = new Set(draft.entities);
+      const mergedTopics = new Set(draft.topics);
+      let mergedImportance = importance;
+      let mergedFrequency = 1;
+      if (isDuplicate) {
+        try {
+          const existing = await this.qdrant.getMemory(id);
+          const p = existing?.payload;
+          if (p?.entities) p.entities.forEach((e) => mergedEntities.add(e));
+          if (p?.topics) p.topics.forEach((t) => mergedTopics.add(t));
+          mergedImportance = Math.max(mergedImportance, p?.importance ?? 0);
+          mergedFrequency = (p?.frequency ?? 1) + 1;
+        } catch {
+          // ignore
+        }
+      }
+
+      const mem = {
+        content: draft.content,
+        importance: mergedImportance,
+        entities: Array.from(mergedEntities).slice(0, 10),
+        topics: Array.from(mergedTopics).slice(0, 10),
+        createdAt: draft.createdAt,
+      };
 
       await this.neo4j.upsertMemory({
         id,
@@ -101,23 +172,48 @@ export class DeepMemoryUpdater {
         });
       }
 
-      const payload: QdrantMemoryPayload = {
-        id,
-        content: mem.content,
-        session_id: params.sessionId,
-        created_at: mem.createdAt,
-        importance: mem.importance,
-        entities: mem.entities,
-        topics: mem.topics,
-      };
-      await this.qdrant.upsertMemory({ id, vector: vec, payload });
+      // Upsert to Qdrant (best-effort).
+      try {
+        const payload: QdrantMemoryPayload = {
+          id,
+          content: mem.content,
+          session_id: params.sessionId,
+          created_at: mem.createdAt,
+          updated_at: nowIso,
+          importance: mem.importance,
+          frequency: mergedFrequency,
+          entities: mem.entities,
+          topics: mem.topics,
+        };
+        await this.qdrant.upsertMemory({ id, vector: vec, payload });
+      } catch {
+        // ignore
+      }
+
+      // Create synapse links: connect this memory to nearby ones (best-effort).
+      if (this.relatedTopK > 0) {
+        try {
+          const hits = await this.qdrant.search({
+            vector: vec,
+            limit: Math.max(1, this.relatedTopK + 1),
+            minScore: Math.max(this.minSemanticScore, 0.8),
+          });
+          for (const hit of hits) {
+            if (!hit?.id || hit.id === id) continue;
+            await this.neo4j.linkMemoryRelated({ fromMemoryId: id, toMemoryId: hit.id, score: hit.score ?? 0 });
+          }
+        } catch {
+          // ignore
+        }
+      }
+
       added += 1;
     }
 
     return {
       status: "processed",
       memories_added: added,
-      memories_filtered: analysis.filtered.filtered,
+      memories_filtered: filtered,
     };
   }
 }

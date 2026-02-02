@@ -17,7 +17,7 @@ describe("SessionAnalyzer", () => {
       maxMemoriesPerSession: 20,
       importanceThreshold: 0.3,
     });
-    expect(result.memories.length).toBeGreaterThan(0);
+    expect(result.drafts.length).toBeGreaterThan(0);
     expect(result.topics.length).toBeGreaterThanOrEqual(0);
   });
 });

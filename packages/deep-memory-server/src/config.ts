@@ -26,6 +26,11 @@ const EnvSchema = z.object({
   IMPORTANCE_THRESHOLD: z.coerce.number().min(0).max(1).default(0.5),
   MAX_MEMORIES_PER_UPDATE: z.coerce.number().int().positive().default(20),
   DEDUPE_SCORE: z.coerce.number().min(0).max(1).default(0.92),
+  DECAY_HALF_LIFE_DAYS: z.coerce.number().int().positive().default(90),
+  IMPORTANCE_BOOST: z.coerce.number().min(0).max(2).default(0.3),
+  FREQUENCY_BOOST: z.coerce.number().min(0).max(2).default(0.2),
+  RELATED_TOPK: z.coerce.number().int().nonnegative().default(5),
+  SENSITIVE_FILTER_ENABLED: z.coerce.boolean().default(true),
 
   // Embeddings
   EMBEDDING_MODEL: z.string().default("Xenova/bge-small-en-v1.5")

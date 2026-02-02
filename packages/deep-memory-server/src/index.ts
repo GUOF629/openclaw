@@ -52,6 +52,9 @@ async function main() {
     minSemanticScore: cfg.MIN_SEMANTIC_SCORE,
     semanticWeight: cfg.SEMANTIC_WEIGHT,
     relationWeight: cfg.RELATION_WEIGHT,
+    decayHalfLifeDays: cfg.DECAY_HALF_LIFE_DAYS,
+    importanceBoost: cfg.IMPORTANCE_BOOST,
+    frequencyBoost: cfg.FREQUENCY_BOOST,
   });
   const updater = new DeepMemoryUpdater({
     analyzer: new SessionAnalyzer(),
@@ -62,6 +65,8 @@ async function main() {
     importanceThreshold: cfg.IMPORTANCE_THRESHOLD,
     maxMemoriesPerUpdate: cfg.MAX_MEMORIES_PER_UPDATE,
     dedupeScore: cfg.DEDUPE_SCORE,
+    relatedTopK: cfg.RELATED_TOPK,
+    sensitiveFilterEnabled: cfg.SENSITIVE_FILTER_ENABLED,
   });
 
   // Simple in-process queue (serial by default) + result coalescing by session id.

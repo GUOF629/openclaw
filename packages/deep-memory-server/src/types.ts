@@ -65,3 +65,15 @@ export type CandidateMemory = {
   createdAt: string; // ISO
 };
 
+export type CandidateMemoryDraft = {
+  content: string;
+  entities: string[];
+  topics: string[];
+  createdAt: string; // ISO
+  signals: {
+    frequency: number;
+    user_intent: number; // 0..1
+    length: number;
+  };
+};
+

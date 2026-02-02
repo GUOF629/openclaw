@@ -4,6 +4,7 @@ import type { DeepMemoryServerConfig } from "./config.js";
 import type { RetrieveContextResponse, UpdateMemoryIndexResponse } from "./types.js";
 import type { DeepMemoryRetriever } from "./retriever.js";
 import type { DeepMemoryUpdater } from "./updater.js";
+import { extractHintsFromText } from "./analyzer.js";
 
 const RetrieveSchema = z.object({
   user_input: z.string(),
@@ -38,20 +39,13 @@ export function createApi(params: {
     }
     const req = parsed.data;
     const maxMemories = req.max_memories ?? 10;
-    // Extraction in server is lightweight; we use simple tokens as both entities/topics hints.
-    const raw = req.user_input.trim();
-    const entities = raw
-      .split(/[^0-9A-Za-z\u4e00-\u9fff]+/g)
-      .map((t) => t.trim())
-      .filter((t) => t.length >= 2)
-      .slice(0, 10);
-    const topics = entities.slice(0, 10);
+    const hints = extractHintsFromText(req.user_input);
     const out: RetrieveContextResponse = await params.retriever.retrieve({
       userInput: req.user_input,
       sessionId: req.session_id,
       maxMemories,
-      entities,
-      topics,
+      entities: hints.entities,
+      topics: hints.topics,
     });
     return c.json(out);
   });

@@ -5,7 +5,9 @@ export type QdrantMemoryPayload = {
   content: string;
   session_id: string;
   created_at: string;
+  updated_at?: string;
   importance: number;
+  frequency?: number;
   entities: string[];
   topics: string[];
 };
@@ -50,6 +52,22 @@ export class QdrantStore {
         },
       ],
     });
+  }
+
+  async getMemory(id: string): Promise<{ id: string; payload?: QdrantMemoryPayload } | null> {
+    const res = await this.client.retrieve(this.collection, {
+      ids: [id],
+      with_payload: true,
+      with_vector: false,
+    });
+    const hit = res[0];
+    if (!hit) {
+      return null;
+    }
+    return {
+      id: String(hit.id),
+      payload: (hit.payload as QdrantMemoryPayload | undefined) ?? undefined,
+    };
   }
 
   async search(params: {
