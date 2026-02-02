@@ -4,9 +4,11 @@ const EnvSchema = z.object({
   PORT: z.coerce.number().int().positive().default(8088),
   HOST: z.string().default("0.0.0.0"),
   API_KEY: z.string().optional(),
+  API_KEYS: z.string().optional(),
   REQUIRE_API_KEY: z.coerce.boolean().default(false),
   MAX_BODY_BYTES: z.coerce.number().int().positive().default(256 * 1024),
   MAX_UPDATE_BODY_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024),
+  AUDIT_LOG_PATH: z.string().optional(),
 
   // Qdrant
   QDRANT_URL: z.string().default("http://qdrant:6333"),

@@ -21,6 +21,8 @@ describe("API auth", () => {
         runNow: async () => ({ status: "processed", memories_added: 0, memories_filtered: 0 }),
         cancelBySession: async () => 0,
         stats: () => ({ pendingApprox: 0, active: 0, inflightKeys: 0 }),
+        listFailed: async () => [],
+        retryFailed: async () => ({ status: "not_found" }),
       } as any,
     });
 
@@ -37,7 +39,7 @@ describe("API auth", () => {
       cfg: {
         PORT: 0,
         HOST: "0.0.0.0",
-        API_KEY: "secret",
+        API_KEYS: "old, secret ,new",
         REQUIRE_API_KEY: false,
         MAX_BODY_BYTES: 1024,
         MAX_UPDATE_BODY_BYTES: 1024,
@@ -51,12 +53,46 @@ describe("API auth", () => {
         runNow: async () => ({ status: "processed", memories_added: 0, memories_filtered: 0 }),
         cancelBySession: async () => 0,
         stats: () => ({ pendingApprox: 0, active: 0, inflightKeys: 0 }),
+        listFailed: async () => [],
+        retryFailed: async () => ({ status: "not_found" }),
       } as any,
     });
 
     const res = await app.request("/update_memory_index", {
       method: "POST",
       headers: { "content-type": "application/json", "x-api-key": "secret" },
+      body: JSON.stringify({ namespace: "default", session_id: "s1", messages: [], async: true }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("accepts update with any key in API_KEYS", async () => {
+    const app = createApi({
+      cfg: {
+        PORT: 0,
+        HOST: "0.0.0.0",
+        API_KEYS: "k1,k2,k3",
+        REQUIRE_API_KEY: false,
+        MAX_BODY_BYTES: 1024,
+        MAX_UPDATE_BODY_BYTES: 1024,
+      } as any,
+      retriever: { retrieve: async () => ({ entities: [], topics: [], memories: [], context: "" }) } as any,
+      updater: { update: async () => ({ status: "processed", memories_added: 0, memories_filtered: 0 }) } as any,
+      qdrant: {} as any,
+      neo4j: {} as any,
+      queue: {
+        enqueue: async () => ({ status: "queued", key: "k", transcriptHash: "h" }),
+        runNow: async () => ({ status: "processed", memories_added: 0, memories_filtered: 0 }),
+        cancelBySession: async () => 0,
+        stats: () => ({ pendingApprox: 0, active: 0, inflightKeys: 0 }),
+        listFailed: async () => [],
+        retryFailed: async () => ({ status: "not_found" }),
+      } as any,
+    });
+
+    const res = await app.request("/update_memory_index", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": "k2" },
       body: JSON.stringify({ namespace: "default", session_id: "s1", messages: [], async: true }),
     });
     expect(res.status).toBe(200);

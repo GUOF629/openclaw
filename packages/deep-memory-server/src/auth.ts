@@ -13,14 +13,23 @@ function timingSafeEqual(a: string, b: string): boolean {
 }
 
 export function requireApiKey(cfg: DeepMemoryServerConfig) {
-  const required = cfg.REQUIRE_API_KEY || Boolean(cfg.API_KEY);
-  const expected = cfg.API_KEY ?? "";
+  const required = cfg.REQUIRE_API_KEY || Boolean(cfg.API_KEY) || Boolean(cfg.API_KEYS);
+  const expected: string[] = [];
+  if (cfg.API_KEY) {
+    expected.push(cfg.API_KEY);
+  }
+  if (cfg.API_KEYS) {
+    for (const part of cfg.API_KEYS.split(",")) {
+      const k = part.trim();
+      if (k) expected.push(k);
+    }
+  }
   return async (c: Context, next: Next) => {
     if (!required) {
       return await next();
     }
     const header = c.req.header("x-api-key") ?? "";
-    const ok = expected && header && timingSafeEqual(header, expected);
+    const ok = Boolean(header) && expected.some((k) => timingSafeEqual(header, k));
     if (!ok) {
       return c.json({ error: "unauthorized" }, 401);
     }

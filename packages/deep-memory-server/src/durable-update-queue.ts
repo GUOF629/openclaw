@@ -208,6 +208,58 @@ export class DurableUpdateQueue {
     };
   }
 
+  async listFailed(params: {
+    limit: number;
+  }): Promise<Array<{ file: string; key: string; attempt: number; lastError?: string; createdAt: string; nextRunAt: number }>> {
+    const names = await fs.readdir(this.failedDir).catch(() => []);
+    const out: Array<{ file: string; key: string; attempt: number; lastError?: string; createdAt: string; nextRunAt: number }> = [];
+    for (const name of names.slice(0, Math.max(1, params.limit))) {
+      const filePath = path.join(this.failedDir, name);
+      try {
+        const task = await readJson<PersistedUpdateTask>(filePath);
+        if (!task || task.kind !== "update") continue;
+        out.push({
+          file: name,
+          key: task.key,
+          attempt: task.attempt ?? 0,
+          lastError: task.lastError,
+          createdAt: task.createdAt,
+          nextRunAt: task.nextRunAt,
+        });
+      } catch {
+        // ignore
+      }
+    }
+    return out;
+  }
+
+  async retryFailed(params: { file: string }): Promise<{ status: "requeued" | "not_found" }> {
+    const name = path.basename(params.file);
+    const from = path.join(this.failedDir, name);
+    try {
+      const task = await readJson<PersistedUpdateTask>(from);
+      if (!task || task.kind !== "update") {
+        return { status: "not_found" };
+      }
+      // Reset schedule; keep attempt counter for visibility.
+      task.nextRunAt = Date.now();
+      task.lastError = undefined;
+      const to = path.join(this.pendingDir, name);
+      await atomicWriteJson(to, task);
+      await fs.rm(from, { force: true });
+
+      const prev = this.pendingFilesByKey.get(task.key);
+      this.pendingFilesByKey.set(task.key, to);
+      if (prev && prev !== to) {
+        void fs.rm(prev, { force: true }).catch(() => {});
+      }
+      void this.pump();
+      return { status: "requeued" };
+    } catch {
+      return { status: "not_found" };
+    }
+  }
+
   async cancelBySession(params: { namespace: string; sessionId: string }): Promise<number> {
     const key = `${params.namespace}::${params.sessionId}`;
     const file = this.pendingFilesByKey.get(key);

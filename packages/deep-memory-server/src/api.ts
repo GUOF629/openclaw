@@ -10,6 +10,7 @@ import type { Neo4jStore } from "./neo4j.js";
 import type { DurableUpdateQueue } from "./durable-update-queue.js";
 import { requireApiKey, requireApiKeyForPaths } from "./auth.js";
 import { enforceBodySize, readJsonWithLimit } from "./body-limit.js";
+import { appendAuditLog } from "./audit-log.js";
 
 const RetrieveSchema = z.object({
   namespace: z.string().optional(),
@@ -57,7 +58,7 @@ export function createApi(params: {
   app.use("*", requireApiKeyForPaths(params.cfg, { prefix: "/queue" }));
   app.use("/forget", requireApiKey(params.cfg));
   app.use("/update_memory_index", requireApiKey(params.cfg));
-  if (params.cfg.REQUIRE_API_KEY || params.cfg.API_KEY) {
+  if (params.cfg.REQUIRE_API_KEY || params.cfg.API_KEY || params.cfg.API_KEYS) {
     app.use("/retrieve_context", requireApiKey(params.cfg));
   }
 
@@ -142,6 +143,17 @@ export function createApi(params: {
     const normalizedIds = ids.map((id) => (id.includes("::") ? id : `${namespace}::${id}`));
 
     if (dryRun) {
+      await appendAuditLog(params.cfg, {
+        action: "forget",
+        namespace,
+        dryRun: true,
+        sessionId: req.session_id ?? undefined,
+        memoryIdsCount: normalizedIds.length,
+        requester: {
+          ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? undefined,
+          userAgent: c.req.header("user-agent") ?? undefined,
+        },
+      }).catch(() => {});
       return c.json({
         status: "dry_run",
         namespace,
@@ -171,11 +183,46 @@ export function createApi(params: {
         deleted += await params.neo4j.deleteMemoriesByIds({ namespace, ids: normalizedIds });
       } catch {}
     }
+    await appendAuditLog(params.cfg, {
+      action: "forget",
+      namespace,
+      dryRun: false,
+      sessionId: req.session_id ?? undefined,
+      memoryIdsCount: normalizedIds.length,
+      deletedReported: deleted,
+      requester: {
+        ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? undefined,
+        userAgent: c.req.header("user-agent") ?? undefined,
+      },
+    }).catch(() => {});
     return c.json({ status: "processed", namespace, deleted });
   });
 
   app.get("/queue/stats", (c) => {
     return c.json({ ok: true, ...params.queue.stats() });
+  });
+
+  app.get("/queue/failed", async (c) => {
+    const limitRaw = c.req.query("limit");
+    const limit = Math.max(1, Math.min(200, Number(limitRaw ?? 50) || 50));
+    const items = await params.queue.listFailed({ limit });
+    return c.json({ ok: true, items });
+  });
+
+  app.post("/queue/failed/retry", async (c) => {
+    const body = await readJsonWithLimit<Record<string, unknown>>(c, {
+      limitBytes: params.cfg.MAX_BODY_BYTES,
+      fallback: {},
+    });
+    if (typeof body === "object" && body && "error" in body) {
+      return c.json(body, body.error === "payload_too_large" ? 413 : 400);
+    }
+    const file = typeof (body as any).file === "string" ? (body as any).file : "";
+    if (!file) {
+      return c.json({ error: "invalid_request" }, 400);
+    }
+    const out = await params.queue.retryFailed({ file });
+    return c.json({ ok: true, ...out });
   });
 
   return app;
