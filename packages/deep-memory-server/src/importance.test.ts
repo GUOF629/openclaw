@@ -25,4 +25,3 @@ describe("computeImportance", () => {
     expect(low).toBe(0);
   });
 });
-

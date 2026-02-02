@@ -1,6 +1,6 @@
+import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { DeepMemoryUpdater } from "./updater.js";
-import crypto from "node:crypto";
 
 describe("DeepMemoryUpdater idempotency", () => {
   it("skips when transcriptHash already ingested", async () => {
@@ -14,7 +14,11 @@ describe("DeepMemoryUpdater idempotency", () => {
       }),
     };
     const embedder = { embed: async () => [0, 0, 0] };
-    const qdrant = { search: async () => [], getMemory: async () => null, upsertMemory: async () => {} };
+    const qdrant = {
+      search: async () => [],
+      getMemory: async () => null,
+      upsertMemory: async () => {},
+    };
 
     const messages = [{ role: "user", content: "hello" }];
     const hash = crypto.createHash("sha256").update(JSON.stringify(messages)).digest("hex");
@@ -25,7 +29,9 @@ describe("DeepMemoryUpdater idempotency", () => {
       getSessionIngestMeta: async () => {
         calls += 1;
         // First call: no meta. Second call: meta exists and should cause skip.
-        if (calls === 1) return {};
+        if (calls === 1) {
+          return {};
+        }
         return { transcriptHash: hash };
       },
       setSessionIngestMeta: async () => {},
@@ -45,10 +51,10 @@ describe("DeepMemoryUpdater idempotency", () => {
     };
 
     const updater = new DeepMemoryUpdater({
-      analyzer: analyzer as any,
-      embedder: embedder as any,
-      qdrant: qdrant as any,
-      neo4j: neo4j as any,
+      analyzer: analyzer as unknown as never,
+      embedder: embedder as unknown as never,
+      qdrant: qdrant as unknown as never,
+      neo4j: neo4j as unknown as never,
       minSemanticScore: 0.6,
       importanceThreshold: 0.5,
       maxMemoriesPerUpdate: 20,
@@ -67,4 +73,3 @@ describe("DeepMemoryUpdater idempotency", () => {
     expect(calls).toBeGreaterThanOrEqual(2);
   });
 });
-

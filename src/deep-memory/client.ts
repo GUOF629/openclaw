@@ -75,7 +75,7 @@ export class DeepMemoryClient {
     // Best-effort eviction: drop oldest (Map insertion order).
     const overflow = this.cache.size - this.cacheMaxEntries;
     for (let i = 0; i < overflow; i += 1) {
-      const first = this.cache.keys().next().value as string | undefined;
+      const first = this.cache.keys().next().value;
       if (!first) {
         break;
       }

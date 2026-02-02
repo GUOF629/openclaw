@@ -45,7 +45,9 @@ function parseForgetCommand(raw: string): ParsedForgetCommand | null {
 
   for (let i = 0; i < tokens.length; i += 1) {
     const t = tokens[i]?.trim();
-    if (!t) continue;
+    if (!t) {
+      continue;
+    }
     const lowered = t.toLowerCase();
     if (
       lowered === "confirm" ||

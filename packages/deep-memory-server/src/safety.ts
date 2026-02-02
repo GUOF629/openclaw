@@ -9,7 +9,8 @@ const SENSITIVE_PATTERNS: RegExp[] = [
 
 export function looksSensitive(text: string): boolean {
   const t = text.trim();
-  if (!t) return false;
+  if (!t) {
+    return false;
+  }
   return SENSITIVE_PATTERNS.some((p) => p.test(t));
 }
-

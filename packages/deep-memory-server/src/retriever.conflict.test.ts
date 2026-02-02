@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { EmbeddingModel } from "./embeddings.js";
+import type { Neo4jStore } from "./neo4j.js";
+import type { QdrantStore } from "./qdrant.js";
 import { DeepMemoryRetriever } from "./retriever.js";
 
 describe("DeepMemoryRetriever conflict resolution", () => {
@@ -69,9 +72,9 @@ describe("DeepMemoryRetriever conflict resolution", () => {
     const neo4j = { queryRelatedMemories: async () => [] };
 
     const retriever = new DeepMemoryRetriever({
-      embedder: embedder as any,
-      qdrant: qdrant as any,
-      neo4j: neo4j as any,
+      embedder: embedder as unknown as EmbeddingModel,
+      qdrant: qdrant as unknown as QdrantStore,
+      neo4j: neo4j as unknown as Neo4jStore,
       minSemanticScore: 0,
       semanticWeight: 1,
       relationWeight: 0,
@@ -95,4 +98,3 @@ describe("DeepMemoryRetriever conflict resolution", () => {
     expect(tz.length).toBe(1);
   });
 });
-

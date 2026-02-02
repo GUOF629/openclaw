@@ -1,16 +1,16 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { DeepMemoryServerConfig } from "./config.js";
-import type { RetrieveContextResponse, UpdateMemoryIndexResponse } from "./types.js";
+import type { DurableUpdateQueue } from "./durable-update-queue.js";
+import type { Neo4jStore } from "./neo4j.js";
+import type { QdrantStore } from "./qdrant.js";
 import type { DeepMemoryRetriever } from "./retriever.js";
+import type { RetrieveContextResponse, UpdateMemoryIndexResponse } from "./types.js";
 import type { DeepMemoryUpdater } from "./updater.js";
 import { extractHintsFromText } from "./analyzer.js";
-import type { QdrantStore } from "./qdrant.js";
-import type { Neo4jStore } from "./neo4j.js";
-import type { DurableUpdateQueue } from "./durable-update-queue.js";
+import { appendAuditLog } from "./audit-log.js";
 import { createAuthz } from "./authz.js";
 import { enforceBodySize, readJsonWithLimit } from "./body-limit.js";
-import { appendAuditLog } from "./audit-log.js";
 
 const RetrieveSchema = z.object({
   namespace: z.string().optional(),
@@ -130,7 +130,11 @@ export function createApi(params: {
       return c.json(resp);
     }
 
-    const result = await params.queue.runNow({ namespace, sessionId: req.session_id, messages: req.messages });
+    const result = await params.queue.runNow({
+      namespace,
+      sessionId: req.session_id,
+      messages: req.messages,
+    });
     return c.json(result);
   });
 
@@ -187,7 +191,10 @@ export function createApi(params: {
         await params.qdrant.deleteBySession({ namespace, sessionId: req.session_id });
       } catch {}
       try {
-        deleted += await params.neo4j.deleteMemoriesBySession({ namespace, sessionId: req.session_id });
+        deleted += await params.neo4j.deleteMemoriesBySession({
+          namespace,
+          sessionId: req.session_id,
+        });
       } catch {}
       try {
         await params.queue.cancelBySession({ namespace, sessionId: req.session_id });
@@ -237,7 +244,9 @@ export function createApi(params: {
     const ns = key ? authz.extractNamespaceFromKey(key) : null;
     if (ns) {
       const nsCheck = authz.assertNamespace(c, ns);
-      if (!nsCheck.ok) return c.json(nsCheck.body, nsCheck.status);
+      if (!nsCheck.ok) {
+        return c.json(nsCheck.body, nsCheck.status);
+      }
     }
     const out = await params.queue.exportFailed({ file, key, limit });
     await appendAuditLog(params.cfg, {
@@ -262,17 +271,25 @@ export function createApi(params: {
     if (typeof body === "object" && body && "error" in body) {
       return c.json(body, body.error === "payload_too_large" ? 413 : 400);
     }
-    const file = typeof (body as any).file === "string" ? ((body as any).file as string) : "";
-    const key = typeof (body as any).key === "string" ? ((body as any).key as string) : "";
-    const dryRun = Boolean((body as any).dry_run);
-    const limit = Math.max(1, Math.min(200, Number((body as any).limit ?? 50) || 50));
+    const file = typeof body.file === "string" ? body.file : "";
+    const key = typeof body.key === "string" ? body.key : "";
+    const dryRun = body.dry_run === true || body.dry_run === "true";
+    const limitRaw =
+      typeof body.limit === "number"
+        ? body.limit
+        : typeof body.limit === "string"
+          ? Number(body.limit)
+          : 50;
+    const limit = Math.max(1, Math.min(200, Number(limitRaw) || 50));
     if (file) {
       // Namespace binding for file retry: peek meta via export first.
       const meta = await params.queue.exportFailed({ file, limit: 1 });
       const ns = meta.mode === "file" ? meta.item.namespace : null;
       if (ns) {
         const nsCheck = authz.assertNamespace(c, ns);
-        if (!nsCheck.ok) return c.json(nsCheck.body, nsCheck.status);
+        if (!nsCheck.ok) {
+          return c.json(nsCheck.body, nsCheck.status);
+        }
       }
       if (dryRun) {
         await appendAuditLog(params.cfg, {
@@ -304,7 +321,9 @@ export function createApi(params: {
       const ns = authz.extractNamespaceFromKey(key);
       if (ns) {
         const nsCheck = authz.assertNamespace(c, ns);
-        if (!nsCheck.ok) return c.json(nsCheck.body, nsCheck.status);
+        if (!nsCheck.ok) {
+          return c.json(nsCheck.body, nsCheck.status);
+        }
       }
       const out = await params.queue.retryFailedByKey({ key, limit, dryRun });
       await appendAuditLog(params.cfg, {
@@ -326,4 +345,3 @@ export function createApi(params: {
 
   return app;
 }
-

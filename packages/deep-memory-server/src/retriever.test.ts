@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { EmbeddingModel } from "./embeddings.js";
+import type { Neo4jStore } from "./neo4j.js";
+import type { QdrantStore } from "./qdrant.js";
 import { DeepMemoryRetriever } from "./retriever.js";
 
 describe("DeepMemoryRetriever", () => {
@@ -46,9 +49,9 @@ describe("DeepMemoryRetriever", () => {
     };
 
     const retriever = new DeepMemoryRetriever({
-      embedder: embedder as any,
-      qdrant: qdrant as any,
-      neo4j: neo4j as any,
+      embedder: embedder as unknown as EmbeddingModel,
+      qdrant: qdrant as unknown as QdrantStore,
+      neo4j: neo4j as unknown as Neo4jStore,
       minSemanticScore: 0,
       semanticWeight: 0.6,
       relationWeight: 0.4,
@@ -69,8 +72,7 @@ describe("DeepMemoryRetriever", () => {
     expect(out.memories.length).toBe(2);
     // m1 has high semantic but is very old => decayed heavily.
     // m2 has strong relation and is fresh => should rank above m1.
-    expect(out.memories[0]!.id).toBe("m2");
-    expect(out.memories[1]!.id).toBe("m1");
+    expect(out.memories[0]?.id).toBe("m2");
+    expect(out.memories[1]?.id).toBe("m1");
   });
 });
-

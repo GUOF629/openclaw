@@ -1,8 +1,8 @@
+import type { Logger } from "pino";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { gzipSync, gunzipSync } from "node:zlib";
-import type { Logger } from "pino";
 import type { UpdateMemoryIndexResponse } from "./types.js";
 import type { DeepMemoryUpdater } from "./updater.js";
 
@@ -36,7 +36,10 @@ function sleep(ms: number) {
 
 function stableTranscriptHash(messages: unknown[]): { hash: string; count: number } {
   const count = Array.isArray(messages) ? messages.length : 0;
-  const hash = crypto.createHash("sha256").update(JSON.stringify(messages ?? [])).digest("hex");
+  const hash = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(messages ?? []))
+    .digest("hex");
   return { hash, count };
 }
 
@@ -171,7 +174,8 @@ export class DurableUpdateQueue {
         const task = await readJson<PersistedUpdateTask>(from);
         const attempt = Math.max(1, (task.attempt ?? 0) + 1);
         task.attempt = attempt;
-        task.nextRunAt = Date.now() + backoffMs({ baseMs: this.retryBaseMs, maxMs: this.retryMaxMs, attempt });
+        task.nextRunAt =
+          Date.now() + backoffMs({ baseMs: this.retryBaseMs, maxMs: this.retryMaxMs, attempt });
         await atomicWriteJson(to, task);
         await fs.rm(from, { force: true });
       } catch (err) {
@@ -186,7 +190,9 @@ export class DurableUpdateQueue {
       const file = path.join(this.pendingDir, name);
       try {
         const task = await readJson<PersistedUpdateTask>(file);
-        if (task?.kind !== "update" || !task.key) continue;
+        if (task?.kind !== "update" || !task.key) {
+          continue;
+        }
         const prev = this.pendingFilesByKey.get(task.key);
         if (!prev) {
           this.pendingFilesByKey.set(task.key, file);
@@ -223,16 +229,32 @@ export class DurableUpdateQueue {
     };
   }
 
-  async listFailed(params: {
-    limit: number;
-  }): Promise<Array<{ file: string; key: string; attempt: number; lastError?: string; createdAt: string; nextRunAt: number }>> {
+  async listFailed(params: { limit: number }): Promise<
+    Array<{
+      file: string;
+      key: string;
+      attempt: number;
+      lastError?: string;
+      createdAt: string;
+      nextRunAt: number;
+    }>
+  > {
     const names = await fs.readdir(this.failedDir).catch(() => []);
-    const out: Array<{ file: string; key: string; attempt: number; lastError?: string; createdAt: string; nextRunAt: number }> = [];
+    const out: Array<{
+      file: string;
+      key: string;
+      attempt: number;
+      lastError?: string;
+      createdAt: string;
+      nextRunAt: number;
+    }> = [];
     for (const name of names.slice(0, Math.max(1, params.limit))) {
       const filePath = path.join(this.failedDir, name);
       try {
         const task = await readJson<PersistedUpdateTask>(filePath);
-        if (!task || task.kind !== "update") continue;
+        if (!task || task.kind !== "update") {
+          continue;
+        }
         out.push({
           file: name,
           key: task.key,
@@ -252,14 +274,20 @@ export class DurableUpdateQueue {
     file?: string;
     key?: string;
     limit: number;
-  }): Promise<{ mode: "file"; item: ReturnType<typeof sanitizeFailedTask> } | { mode: "list"; items: Array<ReturnType<typeof sanitizeFailedTask>> } | { mode: "empty" }> {
+  }): Promise<
+    | { mode: "file"; item: ReturnType<typeof sanitizeFailedTask> }
+    | { mode: "list"; items: Array<ReturnType<typeof sanitizeFailedTask>> }
+    | { mode: "empty" }
+  > {
     const file = params.file?.trim();
     if (file) {
       const name = path.basename(file);
       const filePath = path.join(this.failedDir, name);
       try {
         const task = await readJson<PersistedUpdateTask>(filePath);
-        if (!task || task.kind !== "update") return { mode: "empty" };
+        if (!task || task.kind !== "update") {
+          return { mode: "empty" };
+        }
         return { mode: "file", item: sanitizeFailedTask(task, name) };
       } catch {
         return { mode: "empty" };
@@ -272,10 +300,16 @@ export class DurableUpdateQueue {
       const filePath = path.join(this.failedDir, name);
       try {
         const task = await readJson<PersistedUpdateTask>(filePath);
-        if (!task || task.kind !== "update") continue;
-        if (key && task.key !== key) continue;
+        if (!task || task.kind !== "update") {
+          continue;
+        }
+        if (key && task.key !== key) {
+          continue;
+        }
         items.push(sanitizeFailedTask(task, name));
-        if (items.length >= Math.max(1, params.limit)) break;
+        if (items.length >= Math.max(1, params.limit)) {
+          break;
+        }
       } catch {
         // ignore
       }
@@ -310,9 +344,15 @@ export class DurableUpdateQueue {
     }
   }
 
-  async retryFailedByKey(params: { key: string; limit: number; dryRun: boolean }): Promise<{ status: "ok"; matched: number; retried: number }> {
+  async retryFailedByKey(params: {
+    key: string;
+    limit: number;
+    dryRun: boolean;
+  }): Promise<{ status: "ok"; matched: number; retried: number }> {
     const key = params.key.trim();
-    if (!key) return { status: "ok", matched: 0, retried: 0 };
+    if (!key) {
+      return { status: "ok", matched: 0, retried: 0 };
+    }
     const names = await fs.readdir(this.failedDir).catch(() => []);
     let matched = 0;
     let retried = 0;
@@ -320,8 +360,12 @@ export class DurableUpdateQueue {
       const filePath = path.join(this.failedDir, name);
       try {
         const task = await readJson<PersistedUpdateTask>(filePath);
-        if (!task || task.kind !== "update") continue;
-        if (task.key !== key) continue;
+        if (!task || task.kind !== "update") {
+          continue;
+        }
+        if (task.key !== key) {
+          continue;
+        }
         matched += 1;
         if (params.dryRun) {
           continue;
@@ -330,7 +374,9 @@ export class DurableUpdateQueue {
         if (out.status === "requeued") {
           retried += 1;
         }
-        if (retried >= Math.max(1, params.limit)) break;
+        if (retried >= Math.max(1, params.limit)) {
+          break;
+        }
       } catch {
         // ignore
       }
@@ -341,7 +387,9 @@ export class DurableUpdateQueue {
   async cancelBySession(params: { namespace: string; sessionId: string }): Promise<number> {
     const key = `${params.namespace}::${params.sessionId}`;
     const file = this.pendingFilesByKey.get(key);
-    if (!file) return 0;
+    if (!file) {
+      return 0;
+    }
     this.pendingFilesByKey.delete(key);
     try {
       await fs.rm(file, { force: true });
@@ -351,7 +399,9 @@ export class DurableUpdateQueue {
     }
   }
 
-  async enqueue(req: UpdateRequest): Promise<{ status: "queued"; key: string; transcriptHash: string }> {
+  async enqueue(
+    req: UpdateRequest,
+  ): Promise<{ status: "queued"; key: string; transcriptHash: string }> {
     const namespace = req.namespace?.trim() || "default";
     const key = `${namespace}::${req.sessionId}`;
     const { hash, count } = stableTranscriptHash(req.messages);
@@ -369,9 +419,11 @@ export class DurableUpdateQueue {
     }
 
     const now = new Date();
-    const encoded = encodeMessages(Array.isArray(req.messages) ? (req.messages as unknown[]) : []);
+    const encoded = encodeMessages(Array.isArray(req.messages) ? req.messages : []);
     if (encoded.bytes > this.maxTaskBytes) {
-      throw new Error(`queue task too large (${encoded.bytes} bytes gzipped > ${this.maxTaskBytes})`);
+      throw new Error(
+        `queue task too large (${encoded.bytes} bytes gzipped > ${this.maxTaskBytes})`,
+      );
     }
     const task: PersistedUpdateTask = {
       kind: "update",
@@ -429,7 +481,9 @@ export class DurableUpdateQueue {
     let timer: NodeJS.Timeout | null = null;
     return await new Promise<boolean>((resolve) => {
       const done = () => {
-        if (timer) clearTimeout(timer);
+        if (timer) {
+          clearTimeout(timer);
+        }
         resolve(true);
       };
       this.idleWaiters.push(done);
@@ -446,13 +500,17 @@ export class DurableUpdateQueue {
     }
     const waiters = this.idleWaiters;
     this.idleWaiters = [];
-    for (const w of waiters) w();
+    for (const w of waiters) {
+      w();
+    }
   }
 
   private async cleanupLoop() {
     while (!this.stopped) {
       await sleep(30_000);
-      if (!this.keepDone) continue;
+      if (!this.keepDone) {
+        continue;
+      }
       const cutoff = Date.now() - this.retentionDays * 24 * 3600_000;
       const entries = await fs.readdir(this.doneDir).catch(() => []);
       for (const name of entries) {
@@ -470,7 +528,9 @@ export class DurableUpdateQueue {
   }
 
   private async pump() {
-    if (this.stopped) return;
+    if (this.stopped) {
+      return;
+    }
     while (this.active < this.concurrency) {
       const next = await this.pickRunnableTask();
       if (!next) {
@@ -480,7 +540,10 @@ export class DurableUpdateQueue {
       this.active += 1;
       void this.runTask(next)
         .catch((err) => {
-          this.log.warn({ err: String(err), file: next.filePath }, "task execution failed (unexpected)");
+          this.log.warn(
+            { err: String(err), file: next.filePath },
+            "task execution failed (unexpected)",
+          );
         })
         .finally(() => {
           this.active -= 1;
@@ -490,7 +553,10 @@ export class DurableUpdateQueue {
     }
   }
 
-  private async pickRunnableTask(): Promise<{ filePath: string; task: PersistedUpdateTask } | null> {
+  private async pickRunnableTask(): Promise<{
+    filePath: string;
+    task: PersistedUpdateTask;
+  } | null> {
     // Best-effort: pick first runnable among latest-by-key.
     const now = Date.now();
     for (const [key, filePath] of this.pendingFilesByKey.entries()) {
@@ -579,4 +645,3 @@ export class DurableUpdateQueue {
     }
   }
 }
-

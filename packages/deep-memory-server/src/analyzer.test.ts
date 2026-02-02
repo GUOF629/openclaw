@@ -21,4 +21,3 @@ describe("SessionAnalyzer", () => {
     expect(result.topics.length).toBeGreaterThanOrEqual(0);
   });
 });
-

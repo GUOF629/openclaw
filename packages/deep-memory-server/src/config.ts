@@ -7,8 +7,16 @@ const EnvSchema = z.object({
   API_KEYS: z.string().optional(),
   API_KEYS_JSON: z.string().optional(),
   REQUIRE_API_KEY: z.coerce.boolean().default(false),
-  MAX_BODY_BYTES: z.coerce.number().int().positive().default(256 * 1024),
-  MAX_UPDATE_BODY_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024),
+  MAX_BODY_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(256 * 1024),
+  MAX_UPDATE_BODY_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(2 * 1024 * 1024),
   AUDIT_LOG_PATH: z.string().optional(),
 
   // Qdrant
@@ -27,16 +35,28 @@ const EnvSchema = z.object({
 
   // Service behavior
   LOG_LEVEL: z.string().default("info"),
-  RETRIEVE_CACHE_TTL_MS: z.coerce.number().int().nonnegative().default(5 * 60_000),
+  RETRIEVE_CACHE_TTL_MS: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(5 * 60_000),
   RETRIEVE_CACHE_MAX: z.coerce.number().int().positive().default(500),
   UPDATE_CONCURRENCY: z.coerce.number().int().positive().default(1),
   QUEUE_DIR: z.string().default("./data/queue"),
   QUEUE_MAX_ATTEMPTS: z.coerce.number().int().positive().default(10),
   QUEUE_RETRY_BASE_MS: z.coerce.number().int().positive().default(2_000),
-  QUEUE_RETRY_MAX_MS: z.coerce.number().int().positive().default(5 * 60_000),
+  QUEUE_RETRY_MAX_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5 * 60_000),
   QUEUE_KEEP_DONE: z.coerce.boolean().default(true),
   QUEUE_RETENTION_DAYS: z.coerce.number().int().positive().default(7),
-  QUEUE_MAX_TASK_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024),
+  QUEUE_MAX_TASK_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(2 * 1024 * 1024),
   IMPORTANCE_THRESHOLD: z.coerce.number().min(0).max(1).default(0.5),
   MAX_MEMORIES_PER_UPDATE: z.coerce.number().int().positive().default(20),
   DEDUPE_SCORE: z.coerce.number().min(0).max(1).default(0.92),
@@ -47,7 +67,7 @@ const EnvSchema = z.object({
   SENSITIVE_FILTER_ENABLED: z.coerce.boolean().default(true),
 
   // Embeddings
-  EMBEDDING_MODEL: z.string().default("Xenova/bge-small-en-v1.5")
+  EMBEDDING_MODEL: z.string().default("Xenova/bge-small-en-v1.5"),
 });
 
 export type DeepMemoryServerConfig = z.infer<typeof EnvSchema>;
@@ -60,4 +80,3 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DeepMemoryServ
   }
   return parsed.data;
 }
-

@@ -18,11 +18,21 @@ export class Neo4jStore {
     const session = this.driver.session();
     try {
       // Constraints for fast upserts.
-      await session.run(`CREATE CONSTRAINT deepmem_session_id IF NOT EXISTS FOR (s:Session) REQUIRE s.id IS UNIQUE`);
-      await session.run(`CREATE CONSTRAINT deepmem_memory_id IF NOT EXISTS FOR (m:Memory) REQUIRE m.id IS UNIQUE`);
-      await session.run(`CREATE CONSTRAINT deepmem_topic_id IF NOT EXISTS FOR (t:Topic) REQUIRE t.id IS UNIQUE`);
-      await session.run(`CREATE CONSTRAINT deepmem_entity_id IF NOT EXISTS FOR (e:Entity) REQUIRE e.id IS UNIQUE`);
-      await session.run(`CREATE CONSTRAINT deepmem_event_id IF NOT EXISTS FOR (e:Event) REQUIRE e.id IS UNIQUE`);
+      await session.run(
+        `CREATE CONSTRAINT deepmem_session_id IF NOT EXISTS FOR (s:Session) REQUIRE s.id IS UNIQUE`,
+      );
+      await session.run(
+        `CREATE CONSTRAINT deepmem_memory_id IF NOT EXISTS FOR (m:Memory) REQUIRE m.id IS UNIQUE`,
+      );
+      await session.run(
+        `CREATE CONSTRAINT deepmem_topic_id IF NOT EXISTS FOR (t:Topic) REQUIRE t.id IS UNIQUE`,
+      );
+      await session.run(
+        `CREATE CONSTRAINT deepmem_entity_id IF NOT EXISTS FOR (e:Entity) REQUIRE e.id IS UNIQUE`,
+      );
+      await session.run(
+        `CREATE CONSTRAINT deepmem_event_id IF NOT EXISTS FOR (e:Event) REQUIRE e.id IS UNIQUE`,
+      );
     } finally {
       await session.close();
     }
@@ -45,7 +55,10 @@ export class Neo4jStore {
   }
 
   private eventNodeId(namespace: string, event: ExtractedEvent): string {
-    return `${this.prefix(namespace)}event::${event.type}::${event.timestamp}::${event.summary}`.slice(0, 240);
+    return `${this.prefix(namespace)}event::${event.type}::${event.timestamp}::${event.summary}`.slice(
+      0,
+      240,
+    );
   }
 
   async upsertSession(params: {
@@ -191,7 +204,11 @@ export class Neo4jStore {
     return this.eventNodeId(params.namespace, params.event);
   }
 
-  async linkSessionEvent(params: { namespace: string; sessionId: string; eventId: string }): Promise<void> {
+  async linkSessionEvent(params: {
+    namespace: string;
+    sessionId: string;
+    eventId: string;
+  }): Promise<void> {
     const session = this.driver.session();
     try {
       await session.run(
@@ -205,7 +222,11 @@ export class Neo4jStore {
     }
   }
 
-  async linkEventTopic(params: { namespace: string; eventId: string; topicName: string }): Promise<void> {
+  async linkEventTopic(params: {
+    namespace: string;
+    eventId: string;
+    topicName: string;
+  }): Promise<void> {
     const session = this.driver.session();
     try {
       await session.run(
@@ -213,7 +234,12 @@ export class Neo4jStore {
          MERGE (t:Topic {id: $tid})
          ON CREATE SET t.name = $name, t.frequency = 0, t.importance = 0, t.namespace = $ns
          MERGE (e)-[:ABOUT_TOPIC]->(t)`,
-        { eid: params.eventId, tid: this.topicNodeId(params.namespace, params.topicName), name: params.topicName, ns: params.namespace },
+        {
+          eid: params.eventId,
+          tid: this.topicNodeId(params.namespace, params.topicName),
+          name: params.topicName,
+          ns: params.namespace,
+        },
       );
     } finally {
       await session.close();
@@ -246,7 +272,11 @@ export class Neo4jStore {
     }
   }
 
-  async linkSessionTopic(params: { namespace: string; sessionId: string; topicName: string }): Promise<void> {
+  async linkSessionTopic(params: {
+    namespace: string;
+    sessionId: string;
+    topicName: string;
+  }): Promise<void> {
     const session = this.driver.session();
     try {
       await session.run(
@@ -254,14 +284,24 @@ export class Neo4jStore {
          MERGE (t:Topic {id: $tid})
          ON CREATE SET t.name = $name, t.frequency = 0, t.importance = 0, t.namespace = $ns
          MERGE (s)-[:CONTAINS]->(t)`,
-        { sid: this.sessionNodeId(params.namespace, params.sessionId), tid: this.topicNodeId(params.namespace, params.topicName), name: params.topicName, ns: params.namespace },
+        {
+          sid: this.sessionNodeId(params.namespace, params.sessionId),
+          tid: this.topicNodeId(params.namespace, params.topicName),
+          name: params.topicName,
+          ns: params.namespace,
+        },
       );
     } finally {
       await session.close();
     }
   }
 
-  async linkTopicEntity(params: { namespace: string; topicName: string; entityName: string; entityType: string }): Promise<void> {
+  async linkTopicEntity(params: {
+    namespace: string;
+    topicName: string;
+    entityName: string;
+    entityType: string;
+  }): Promise<void> {
     const session = this.driver.session();
     try {
       await session.run(
@@ -310,7 +350,8 @@ export class Neo4jStore {
           kind: params.memory.kind,
           memory_key: params.memory.memoryKey ?? null,
           subject: params.memory.subject ?? null,
-          confidence: typeof params.memory.confidence === "number" ? params.memory.confidence : null,
+          confidence:
+            typeof params.memory.confidence === "number" ? params.memory.confidence : null,
           expires_at: params.memory.expiresAt ?? null,
         },
       );
@@ -319,7 +360,11 @@ export class Neo4jStore {
     }
   }
 
-  async linkMemoryTopic(params: { namespace: string; memoryId: string; topicName: string }): Promise<void> {
+  async linkMemoryTopic(params: {
+    namespace: string;
+    memoryId: string;
+    topicName: string;
+  }): Promise<void> {
     const session = this.driver.session();
     try {
       await session.run(
@@ -327,14 +372,24 @@ export class Neo4jStore {
          MERGE (t:Topic {id: $tid})
          ON CREATE SET t.name = $name, t.frequency = 0, t.importance = 0, t.namespace = $ns
          MERGE (m)-[:ABOUT_TOPIC]->(t)`,
-        { mid: params.memoryId, tid: this.topicNodeId(params.namespace, params.topicName), name: params.topicName, ns: params.namespace },
+        {
+          mid: params.memoryId,
+          tid: this.topicNodeId(params.namespace, params.topicName),
+          name: params.topicName,
+          ns: params.namespace,
+        },
       );
     } finally {
       await session.close();
     }
   }
 
-  async linkMemoryEntity(params: { namespace: string; memoryId: string; entityName: string; entityType: string }) {
+  async linkMemoryEntity(params: {
+    namespace: string;
+    memoryId: string;
+    entityName: string;
+    entityType: string;
+  }) {
     const session = this.driver.session();
     try {
       await session.run(
@@ -355,7 +410,12 @@ export class Neo4jStore {
     }
   }
 
-  async linkMemoryRelated(params: { namespace: string; fromMemoryId: string; toMemoryId: string; score: number }): Promise<void> {
+  async linkMemoryRelated(params: {
+    namespace: string;
+    fromMemoryId: string;
+    toMemoryId: string;
+    score: number;
+  }): Promise<void> {
     const session = this.driver.session();
     try {
       await session.run(
@@ -506,4 +566,3 @@ export class Neo4jStore {
     }
   }
 }
-

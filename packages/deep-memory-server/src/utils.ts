@@ -18,4 +18,3 @@ export function stableHash(input: string): string {
   }
   return (h >>> 0).toString(16);
 }
-

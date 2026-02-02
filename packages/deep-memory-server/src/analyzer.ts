@@ -1,4 +1,10 @@
-import type { CandidateMemoryDraft, ExtractedEntity, ExtractedEvent, ExtractedTopic, MemoryKind } from "./types.js";
+import type {
+  CandidateMemoryDraft,
+  ExtractedEntity,
+  ExtractedEvent,
+  ExtractedTopic,
+  MemoryKind,
+} from "./types.js";
 import { safeTrim, stableHash } from "./utils.js";
 
 type TranscriptMessage = {
@@ -41,9 +47,15 @@ function detectUserIntentScore(text: string): number {
 
 function guessEntityType(name: string): ExtractedEntity["type"] {
   const n = name.toLowerCase();
-  if (/project|repo|服务|项目|工程/.test(n)) return "project";
-  if (/公司|org|organization|团队/.test(n)) return "organization";
-  if (/北京|上海|shanghai|beijing|city|地点|地址/.test(n)) return "place";
+  if (/project|repo|服务|项目|工程/.test(n)) {
+    return "project";
+  }
+  if (/公司|org|organization|团队/.test(n)) {
+    return "organization";
+  }
+  if (/北京|上海|shanghai|beijing|city|地点|地址/.test(n)) {
+    return "place";
+  }
   return "other";
 }
 
@@ -107,7 +119,7 @@ function topKFrequency(tokens: string[], k: number): Array<{ term: string; count
   }
   return Array.from(map.entries())
     .map(([term, count]) => ({ term, count }))
-    .sort((a, b) => b.count - a.count)
+    .toSorted((a, b) => b.count - a.count)
     .slice(0, k);
 }
 
@@ -133,21 +145,35 @@ export function extractHintsFromText(input: string): { entities: string[]; topic
 
 function detectMemoryKind(text: string): MemoryKind {
   const t = text.toLowerCase();
-  if (/临时|本次|仅本次|only this time|temporary/.test(t)) return "ephemeral";
-  if (/todo|待办|下一步|接下来|需要完成|计划|task/.test(t)) return "task";
-  if (/偏好|喜欢|讨厌|不喜欢|习惯|prefer|preference|like|hate/.test(t)) return "preference";
-  if (/规则|约定|必须|务必|不要|永远|policy|rule|must|never|always/.test(t)) return "rule";
+  if (/临时|本次|仅本次|only this time|temporary/.test(t)) {
+    return "ephemeral";
+  }
+  if (/todo|待办|下一步|接下来|需要完成|计划|task/.test(t)) {
+    return "task";
+  }
+  if (/偏好|喜欢|讨厌|不喜欢|习惯|prefer|preference|like|hate/.test(t)) {
+    return "preference";
+  }
+  if (/规则|约定|必须|务必|不要|永远|policy|rule|must|never|always/.test(t)) {
+    return "rule";
+  }
   return "fact";
 }
 
 function guessSubject(entities: ExtractedEntity[], topics: ExtractedTopic[]): string | undefined {
   const e = entities[0]?.name?.trim();
-  if (e) return e;
+  if (e) {
+    return e;
+  }
   const t = topics[0]?.name?.trim();
   return t || undefined;
 }
 
-function guessMemoryKey(kind: MemoryKind, subject: string | undefined, content: string): string | undefined {
+function guessMemoryKey(
+  kind: MemoryKind,
+  subject: string | undefined,
+  _content: string,
+): string | undefined {
   if (!subject) {
     return kind === "rule" ? "rule:general" : undefined;
   }
@@ -173,9 +199,15 @@ function guessExpiresAt(kind: MemoryKind, text: string, now: Date): string | und
   const base = now.getTime();
   const dayMs = 24 * 3600_000;
   // Very rough TTL hints.
-  if (/今天|today/.test(t)) return new Date(base + dayMs).toISOString();
-  if (/本周|this week|一周|7天/.test(t)) return new Date(base + 7 * dayMs).toISOString();
-  if (/本月|this month|30天/.test(t)) return new Date(base + 30 * dayMs).toISOString();
+  if (/今天|today/.test(t)) {
+    return new Date(base + dayMs).toISOString();
+  }
+  if (/本周|this week|一周|7天/.test(t)) {
+    return new Date(base + 7 * dayMs).toISOString();
+  }
+  if (/本月|this month|30天/.test(t)) {
+    return new Date(base + 30 * dayMs).toISOString();
+  }
   return new Date(base + 7 * dayMs).toISOString();
 }
 
@@ -264,7 +296,7 @@ export class SessionAnalyzer {
     for (const msg of collected) {
       const text = msg.text;
       const intent = detectUserIntentScore(text);
-      const frequency = topicTerms.length > 0 ? topicTerms[0]!.count : 1;
+      const frequency = topicTerms[0]?.count ?? 1;
       const content = safeTrim(text.replace(/\s+/g, " "));
       if (!content || content.length < 20) {
         continue;
@@ -333,4 +365,3 @@ export class SessionAnalyzer {
     };
   }
 }
-

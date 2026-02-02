@@ -2,7 +2,9 @@ import type { Context, Next } from "hono";
 import type { DeepMemoryServerConfig } from "./config.js";
 
 function parseContentLength(raw: string | undefined): number | null {
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
   const n = Number(raw);
   return Number.isFinite(n) && n >= 0 ? n : null;
 }
@@ -37,4 +39,3 @@ export async function readJsonWithLimit<T>(
     return { error: "invalid_json" };
   }
 }
-

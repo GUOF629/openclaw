@@ -1,16 +1,16 @@
 import { serve } from "@hono/node-server";
 import { LRUCache } from "lru-cache";
-import { loadConfig } from "./config.js";
-import { createLogger } from "./logger.js";
-import { EmbeddingModel } from "./embeddings.js";
-import { QdrantStore } from "./qdrant.js";
-import { Neo4jStore } from "./neo4j.js";
-import { DeepMemoryRetriever } from "./retriever.js";
-import { DeepMemoryUpdater } from "./updater.js";
+import type { RetrieveContextResponse } from "./types.js";
 import { SessionAnalyzer } from "./analyzer.js";
 import { createApi } from "./api.js";
+import { loadConfig } from "./config.js";
 import { DurableUpdateQueue } from "./durable-update-queue.js";
-import type { RetrieveContextResponse } from "./types.js";
+import { EmbeddingModel } from "./embeddings.js";
+import { createLogger } from "./logger.js";
+import { Neo4jStore } from "./neo4j.js";
+import { QdrantStore } from "./qdrant.js";
+import { DeepMemoryRetriever } from "./retriever.js";
+import { DeepMemoryUpdater } from "./updater.js";
 
 async function main() {
   const cfg = loadConfig();
@@ -87,21 +87,22 @@ async function main() {
     ttl: cfg.RETRIEVE_CACHE_TTL_MS,
   });
 
+  const baseRetrieve = retriever.retrieve.bind(retriever);
+  // Avoid re-embedding the same input across concurrent callers.
+  retriever.retrieve = async (params: Parameters<DeepMemoryRetriever["retrieve"]>[0]) => {
+    const key = `${params.namespace}::${params.sessionId}::${params.maxMemories}::${params.userInput.trim()}`;
+    const cached = retrieveCache.get(key);
+    if (cached) {
+      return await cached;
+    }
+    const promise = baseRetrieve(params);
+    retrieveCache.set(key, promise);
+    return await promise;
+  };
+
   const app = createApi({
     cfg,
-    retriever: {
-      ...retriever,
-      retrieve: async (params: Parameters<DeepMemoryRetriever["retrieve"]>[0]) => {
-        const key = `${params.namespace}::${params.sessionId}::${params.maxMemories}::${params.userInput.trim()}`;
-        const cached = retrieveCache.get(key);
-        if (cached) {
-          return await cached;
-        }
-        const promise = retriever.retrieve(params);
-        retrieveCache.set(key, promise);
-        return await promise;
-      },
-    } as unknown as DeepMemoryRetriever,
+    retriever,
     updater,
     qdrant,
     neo4j,
@@ -127,4 +128,3 @@ async function main() {
 }
 
 void main();
-

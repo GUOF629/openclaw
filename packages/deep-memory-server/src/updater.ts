@@ -78,7 +78,11 @@ export class DeepMemoryUpdater {
 
     for (const t of analysis.topics) {
       await this.neo4j.upsertTopic({ namespace: params.namespace, topic: t });
-      await this.neo4j.linkSessionTopic({ namespace: params.namespace, sessionId: params.sessionId, topicName: t.name });
+      await this.neo4j.linkSessionTopic({
+        namespace: params.namespace,
+        sessionId: params.sessionId,
+        topicName: t.name,
+      });
     }
     for (const e of analysis.entities) {
       await this.neo4j.upsertEntity({ namespace: params.namespace, entity: e });
@@ -94,9 +98,17 @@ export class DeepMemoryUpdater {
     for (const ev of analysis.events) {
       await this.neo4j.upsertEvent({ namespace: params.namespace, event: ev });
       const eventId = this.neo4j.eventId({ namespace: params.namespace, event: ev });
-      await this.neo4j.linkSessionEvent({ namespace: params.namespace, sessionId: params.sessionId, eventId });
+      await this.neo4j.linkSessionEvent({
+        namespace: params.namespace,
+        sessionId: params.sessionId,
+        eventId,
+      });
       for (const t of analysis.topics.slice(0, 3)) {
-        await this.neo4j.linkEventTopic({ namespace: params.namespace, eventId, topicName: t.name });
+        await this.neo4j.linkEventTopic({
+          namespace: params.namespace,
+          eventId,
+          topicName: t.name,
+        });
       }
       const topEntities = analysis.entities.slice(0, 3);
       for (const ent of topEntities) {
@@ -156,7 +168,9 @@ export class DeepMemoryUpdater {
       }
 
       const isDuplicate = bestId && bestScore >= this.dedupeScore;
-      const rawId = isDuplicate ? bestId! : `mem_${stableHash(`${params.sessionId}:${draft.content}`)}`;
+      const rawId = isDuplicate
+        ? bestId!
+        : `mem_${stableHash(`${params.sessionId}:${draft.content}`)}`;
       const id = rawId.includes("::") ? rawId : `${params.namespace}::${rawId}`;
 
       const mergedEntities = new Set(draft.entities);
@@ -167,8 +181,12 @@ export class DeepMemoryUpdater {
         try {
           const existing = await this.qdrant.getMemory(id);
           const p = existing?.payload;
-          if (p?.entities) p.entities.forEach((e) => mergedEntities.add(e));
-          if (p?.topics) p.topics.forEach((t) => mergedTopics.add(t));
+          if (p?.entities) {
+            p.entities.forEach((e) => mergedEntities.add(e));
+          }
+          if (p?.topics) {
+            p.topics.forEach((t) => mergedTopics.add(t));
+          }
           mergedImportance = Math.max(mergedImportance, p?.importance ?? 0);
           mergedFrequency = (p?.frequency ?? 1) + 1;
           // Preserve durable classification/slotting if present.
@@ -178,8 +196,17 @@ export class DeepMemoryUpdater {
           if (!draft.subject && p?.subject) {
             draft.subject = p.subject;
           }
-          if (!draft.kind && p?.kind) {
-            draft.kind = p.kind as any;
+          if (!draft.kind && typeof p?.kind === "string") {
+            const k = p.kind;
+            if (
+              k === "rule" ||
+              k === "preference" ||
+              k === "fact" ||
+              k === "task" ||
+              k === "ephemeral"
+            ) {
+              draft.kind = k;
+            }
           }
           if (!draft.expiresAt && p?.expires_at) {
             draft.expiresAt = p.expires_at;
@@ -212,7 +239,11 @@ export class DeepMemoryUpdater {
         sessionId: params.sessionId,
       });
       for (const t of mem.topics) {
-        await this.neo4j.linkMemoryTopic({ namespace: params.namespace, memoryId: id, topicName: t });
+        await this.neo4j.linkMemoryTopic({
+          namespace: params.namespace,
+          memoryId: id,
+          topicName: t,
+        });
       }
       for (const name of mem.entities) {
         const type = entityTypeByName.get(name) ?? "other";
@@ -260,7 +291,9 @@ export class DeepMemoryUpdater {
             namespace: params.namespace,
           });
           for (const hit of hits) {
-            if (!hit?.id || hit.id === id) continue;
+            if (!hit?.id || hit.id === id) {
+              continue;
+            }
             await this.neo4j.linkMemoryRelated({
               namespace: params.namespace,
               fromMemoryId: id,
@@ -295,4 +328,3 @@ export class DeepMemoryUpdater {
     };
   }
 }
-

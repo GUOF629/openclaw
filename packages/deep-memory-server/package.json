@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/deep-memory-server",
-  "private": true,
   "version": "0.1.0",
+  "private": true,
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "node --import tsx src/index.ts",
     "build": "tsc -p tsconfig.json",
+    "dev": "node --import tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "vitest run --config vitest.config.ts"
   },
@@ -30,4 +30,3 @@
     "node": ">=22.12.0"
   }
 }
-

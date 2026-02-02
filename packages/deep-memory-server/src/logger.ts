@@ -18,4 +18,3 @@ export function createLogger(level: string) {
     },
   });
 }
-

@@ -38,7 +38,12 @@ export class DeepMemoryRetriever {
     this.frequencyBoost = Math.max(0, params.frequencyBoost);
   }
 
-  private scoreWithDecay(params: { relevance: number; importance: number; frequency: number; lastSeenAt?: string }): number {
+  private scoreWithDecay(params: {
+    relevance: number;
+    importance: number;
+    frequency: number;
+    lastSeenAt?: string;
+  }): number {
     const base = Math.max(0, params.relevance);
     const imp = clamp(params.importance ?? 0, 0, 1);
     const freq = Math.max(0, params.frequency ?? 0);
@@ -151,7 +156,7 @@ export class DeepMemoryRetriever {
         existing.content = existing.content || payload.content;
         existing.importance = Math.max(existing.importance ?? 0, payload.importance ?? 0);
         existing.frequency = Math.max(existing.frequency ?? 0, payload.frequency ?? 0);
-        existing.lastSeenAt = existing.lastSeenAt ?? (payload.updated_at ?? payload.created_at);
+        existing.lastSeenAt = existing.lastSeenAt ?? payload.updated_at ?? payload.created_at;
         existing.semantic = Math.max(existing.semantic ?? 0, hit.score ?? 0);
         existing.sources.add("qdrant");
       }
@@ -192,7 +197,9 @@ export class DeepMemoryRetriever {
 
     const now = Date.now();
     const isExpired = (expiresAt?: string) => {
-      if (!expiresAt) return false;
+      if (!expiresAt) {
+        return false;
+      }
       const t = Date.parse(expiresAt);
       return Number.isFinite(t) && t > 0 && t < now;
     };
@@ -222,7 +229,7 @@ export class DeepMemoryRetriever {
           sources: Array.from(r.sources),
         };
       })
-      .sort((a, b) => b.relevance - a.relevance);
+      .toSorted((a, b) => b.relevance - a.relevance);
 
     // Conflict resolution: group by memory_key (slot) and pick the best per group.
     const byKey = new Map<string, (typeof merged)[number]>();
@@ -241,7 +248,7 @@ export class DeepMemoryRetriever {
       }
     }
     const resolved = Array.from(byKey.values())
-      .sort((a, b) => b.relevance - a.relevance)
+      .toSorted((a, b) => b.relevance - a.relevance)
       .slice(0, params.maxMemories);
 
     const contextLines = resolved.map((m, idx) => {
@@ -266,4 +273,3 @@ export class DeepMemoryRetriever {
     };
   }
 }
-

@@ -1,6 +1,6 @@
+import type { Context, Next } from "hono";
 import crypto from "node:crypto";
 import { z } from "zod";
-import type { Context, Next } from "hono";
 import type { DeepMemoryServerConfig } from "./config.js";
 
 export type AuthRole = "read" | "write" | "admin";
@@ -57,11 +57,15 @@ function parseRules(cfg: DeepMemoryServerConfig): ApiKeyRule[] {
   }
 
   const keys: string[] = [];
-  if (cfg.API_KEY?.trim()) keys.push(cfg.API_KEY.trim());
+  if (cfg.API_KEY?.trim()) {
+    keys.push(cfg.API_KEY.trim());
+  }
   if (cfg.API_KEYS?.trim()) {
     for (const part of cfg.API_KEYS.split(",")) {
       const k = part.trim();
-      if (k) keys.push(k);
+      if (k) {
+        keys.push(k);
+      }
     }
   }
   // Back-compat: if configured via API_KEY/API_KEYS, treat as admin over all namespaces.
@@ -69,13 +73,17 @@ function parseRules(cfg: DeepMemoryServerConfig): ApiKeyRule[] {
 }
 
 function normalizeNamespaces(list?: string[]): string[] {
-  if (!list || list.length === 0) return ["*"];
+  if (!list || list.length === 0) {
+    return ["*"];
+  }
   const out = list.map((s) => s.trim()).filter(Boolean);
   return out.length === 0 ? ["*"] : out;
 }
 
 function namespaceAllowed(auth: AuthInfo, namespace: string): boolean {
-  if (auth.namespaces.includes("*")) return true;
+  if (auth.namespaces.includes("*")) {
+    return true;
+  }
   return auth.namespaces.includes(namespace);
 }
 
@@ -93,7 +101,9 @@ export function createAuthz(cfg: DeepMemoryServerConfig) {
 
   const resolveAuth = (provided: string): AuthInfo | null => {
     const header = provided.trim();
-    if (!header) return null;
+    if (!header) {
+      return null;
+    }
     for (const r of rules) {
       if (timingSafeEqual(header, r.key)) {
         return { role: r.role, namespaces: r.namespaces, keyId: r.keyId };
@@ -136,7 +146,9 @@ export function createAuthz(cfg: DeepMemoryServerConfig) {
   };
 
   const assertNamespace = (c: Context, namespace: string) => {
-    if (!required) return { ok: true as const };
+    if (!required) {
+      return { ok: true as const };
+    }
     const auth = getAuth(c);
     if (!auth) {
       return { ok: false as const, status: 401 as const, body: { error: "unauthorized" as const } };
@@ -153,7 +165,9 @@ export function createAuthz(cfg: DeepMemoryServerConfig) {
 
   const extractNamespaceFromKey = (key: string): string | null => {
     const idx = key.indexOf("::");
-    if (idx <= 0) return null;
+    if (idx <= 0) {
+      return null;
+    }
     return key.slice(0, idx);
   };
 
@@ -166,4 +180,3 @@ export function createAuthz(cfg: DeepMemoryServerConfig) {
     getAuth,
   };
 }
-

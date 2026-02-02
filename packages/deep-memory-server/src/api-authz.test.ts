@@ -1,13 +1,23 @@
 import { describe, expect, it } from "vitest";
+import type { DeepMemoryServerConfig } from "./config.js";
+import type { DurableUpdateQueue } from "./durable-update-queue.js";
+import type { Neo4jStore } from "./neo4j.js";
+import type { QdrantStore } from "./qdrant.js";
+import type { DeepMemoryRetriever } from "./retriever.js";
+import type { DeepMemoryUpdater } from "./updater.js";
 import { createApi } from "./api.js";
 
-function createStubApi(cfg: any) {
+function createStubApi(cfg: DeepMemoryServerConfig) {
   return createApi({
     cfg,
-    retriever: { retrieve: async () => ({ entities: [], topics: [], memories: [], context: "" }) } as any,
-    updater: { update: async () => ({ status: "processed", memories_added: 0, memories_filtered: 0 }) } as any,
-    qdrant: {} as any,
-    neo4j: {} as any,
+    retriever: {
+      retrieve: async () => ({ entities: [], topics: [], memories: [], context: "" }),
+    } as unknown as DeepMemoryRetriever,
+    updater: {
+      update: async () => ({ status: "processed", memories_added: 0, memories_filtered: 0 }),
+    } as unknown as DeepMemoryUpdater,
+    qdrant: {} as unknown as QdrantStore,
+    neo4j: {} as unknown as Neo4jStore,
     queue: {
       stats: () => ({ pendingApprox: 0, active: 0, inflightKeys: 0 }),
       listFailed: async () => [],
@@ -17,7 +27,7 @@ function createStubApi(cfg: any) {
       enqueue: async () => ({ status: "queued", key: "k", transcriptHash: "h" }),
       runNow: async () => ({ status: "processed", memories_added: 0, memories_filtered: 0 }),
       cancelBySession: async () => 0,
-    } as any,
+    } as unknown as DurableUpdateQueue,
   });
 }
 
@@ -94,4 +104,3 @@ describe("API authz (roles + namespaces)", () => {
     expect(r2.status).toBe(200);
   });
 });
-

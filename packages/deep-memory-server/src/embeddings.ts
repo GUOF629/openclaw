@@ -15,9 +15,9 @@ export class EmbeddingModel {
     if (pipe) {
       return;
     }
-    pipe = (await pipeline("feature-extraction", this.modelId, {
+    pipe = await pipeline("feature-extraction", this.modelId, {
       quantized: true,
-    })) as FeatureExtractionPipeline;
+    });
   }
 
   /**
@@ -45,4 +45,3 @@ export class EmbeddingModel {
     return arr;
   }
 }
-

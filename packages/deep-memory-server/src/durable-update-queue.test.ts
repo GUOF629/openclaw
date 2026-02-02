@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
 import pino from "pino";
+import { describe, expect, it } from "vitest";
 import { DurableUpdateQueue } from "./durable-update-queue.js";
 
 describe("DurableUpdateQueue", () => {
@@ -20,7 +20,7 @@ describe("DurableUpdateQueue", () => {
 
     const queue = new DurableUpdateQueue({
       log,
-      updater: updater as any,
+      updater: updater as unknown as never,
       concurrency: 1,
       dir,
       maxAttempts: 3,
@@ -32,7 +32,11 @@ describe("DurableUpdateQueue", () => {
     });
     await queue.init();
 
-    await queue.enqueue({ namespace: "default", sessionId: "s1", messages: [{ role: "user", content: "hi" }] });
+    await queue.enqueue({
+      namespace: "default",
+      sessionId: "s1",
+      messages: [{ role: "user", content: "hi" }],
+    });
     const ok = await queue.onIdle({ timeoutMs: 5_000 });
     expect(ok).toBe(true);
     expect(processed).toBe(1);
@@ -47,10 +51,12 @@ describe("DurableUpdateQueue", () => {
     const log = pino({ level: "silent" });
 
     // First queue: enqueue and simulate an inflight crash by moving file ourselves.
-    const updater = { update: async () => ({ status: "processed", memories_added: 1, memories_filtered: 0 }) };
+    const updater = {
+      update: async () => ({ status: "processed", memories_added: 1, memories_filtered: 0 }),
+    };
     const q1 = new DurableUpdateQueue({
       log,
-      updater: updater as any,
+      updater: updater as unknown as never,
       concurrency: 1,
       dir,
       maxAttempts: 3,
@@ -61,7 +67,11 @@ describe("DurableUpdateQueue", () => {
       maxTaskBytes: 1024 * 1024,
     });
     await q1.init();
-    await q1.enqueue({ namespace: "default", sessionId: "s1", messages: [{ role: "user", content: "hi" }] });
+    await q1.enqueue({
+      namespace: "default",
+      sessionId: "s1",
+      messages: [{ role: "user", content: "hi" }],
+    });
     await q1.onIdle({ timeoutMs: 5_000 });
 
     // Now create an inflight file to be recovered.
@@ -89,7 +99,7 @@ describe("DurableUpdateQueue", () => {
     // Restart: should move inflight back to pending.
     const q2 = new DurableUpdateQueue({
       log,
-      updater: updater as any,
+      updater: updater as unknown as never,
       concurrency: 1,
       dir,
       maxAttempts: 3,
@@ -107,10 +117,12 @@ describe("DurableUpdateQueue", () => {
   it("exports failed tasks without messages", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "deepmem-queue-"));
     const log = pino({ level: "silent" });
-    const updater = { update: async () => ({ status: "processed", memories_added: 1, memories_filtered: 0 }) };
+    const updater = {
+      update: async () => ({ status: "processed", memories_added: 1, memories_filtered: 0 }),
+    };
     const q = new DurableUpdateQueue({
       log,
-      updater: updater as any,
+      updater: updater as unknown as never,
       concurrency: 1,
       dir,
       maxAttempts: 1,
@@ -145,19 +157,22 @@ describe("DurableUpdateQueue", () => {
     const out = await q.exportFailed({ limit: 10 });
     expect(out.mode).toBe("list");
     if (out.mode === "list") {
-      expect(out.items[0]!.file).toBe("x.json");
-      expect((out.items[0] as any).messages).toBeUndefined();
-      expect(out.items[0]!.lastError).toBe("boom");
+      const first = out.items[0];
+      expect(first?.file).toBe("x.json");
+      expect((first as Record<string, unknown> | undefined)?.messages).toBeUndefined();
+      expect(first?.lastError).toBe("boom");
     }
   });
 
   it("retries failed tasks by key with limit", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "deepmem-queue-"));
     const log = pino({ level: "silent" });
-    const updater = { update: async () => ({ status: "processed", memories_added: 1, memories_filtered: 0 }) };
+    const updater = {
+      update: async () => ({ status: "processed", memories_added: 1, memories_filtered: 0 }),
+    };
     const q = new DurableUpdateQueue({
       log,
-      updater: updater as any,
+      updater: updater as unknown as never,
       concurrency: 1,
       dir,
       maxAttempts: 1,
@@ -217,4 +232,3 @@ describe("DurableUpdateQueue", () => {
     expect(pending.length).toBe(1);
   });
 });
-

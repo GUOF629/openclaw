@@ -28,7 +28,7 @@ function buildCfg(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
         },
       },
     },
-    ...(overrides ?? {}),
+    ...overrides,
   };
 }
 
@@ -45,7 +45,15 @@ describe("deep-memory update scheduler", () => {
 
     const fetchCalls: string[] = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
-      fetchCalls.push(String(input));
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input instanceof Request
+              ? input.url
+              : "";
+      fetchCalls.push(url);
       return new Response(JSON.stringify({ status: "ok" }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -84,7 +92,15 @@ describe("deep-memory update scheduler", () => {
 
     const fetchCalls: string[] = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
-      fetchCalls.push(String(input));
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input instanceof Request
+              ? input.url
+              : "";
+      fetchCalls.push(url);
       return new Response(JSON.stringify({ status: "ok" }), {
         status: 200,
         headers: { "content-type": "application/json" },

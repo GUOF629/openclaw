@@ -94,4 +94,3 @@ export type CandidateMemoryDraft = {
     length: number;
   };
 };
-

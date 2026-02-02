@@ -43,7 +43,10 @@ type QueueFailedRetryAuditEntry = {
   requester: AuditRequester;
 };
 
-export type AuditEntry = ForgetAuditEntry | QueueFailedExportAuditEntry | QueueFailedRetryAuditEntry;
+export type AuditEntry =
+  | ForgetAuditEntry
+  | QueueFailedExportAuditEntry
+  | QueueFailedRetryAuditEntry;
 
 export type AuditEntryInput =
   | Omit<ForgetAuditEntry, "id" | "ts">
@@ -67,4 +70,3 @@ export async function appendAuditLog(cfg: DeepMemoryServerConfig, entry: AuditEn
   await ensureParent(filePath);
   await fs.appendFile(filePath, `${JSON.stringify(line)}\n`, "utf8");
 }
-

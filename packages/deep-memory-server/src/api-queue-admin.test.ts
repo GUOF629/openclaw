@@ -1,4 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { DeepMemoryServerConfig } from "./config.js";
+import type { DurableUpdateQueue } from "./durable-update-queue.js";
+import type { Neo4jStore } from "./neo4j.js";
+import type { QdrantStore } from "./qdrant.js";
+import type { DeepMemoryRetriever } from "./retriever.js";
+import type { DeepMemoryUpdater } from "./updater.js";
 import { createApi } from "./api.js";
 
 describe("API queue admin", () => {
@@ -11,11 +17,15 @@ describe("API queue admin", () => {
         REQUIRE_API_KEY: false,
         MAX_BODY_BYTES: 1024,
         MAX_UPDATE_BODY_BYTES: 1024,
-      } as any,
-      retriever: { retrieve: async () => ({ entities: [], topics: [], memories: [], context: "" }) } as any,
-      updater: { update: async () => ({ status: "processed", memories_added: 0, memories_filtered: 0 }) } as any,
-      qdrant: {} as any,
-      neo4j: {} as any,
+      } as unknown as DeepMemoryServerConfig,
+      retriever: {
+        retrieve: async () => ({ entities: [], topics: [], memories: [], context: "" }),
+      } as unknown as DeepMemoryRetriever,
+      updater: {
+        update: async () => ({ status: "processed", memories_added: 0, memories_filtered: 0 }),
+      } as unknown as DeepMemoryUpdater,
+      qdrant: {} as unknown as QdrantStore,
+      neo4j: {} as unknown as Neo4jStore,
       queue: {
         stats: () => ({ pendingApprox: 0, active: 0, inflightKeys: 0 }),
         listFailed: async () => [],
@@ -25,7 +35,7 @@ describe("API queue admin", () => {
         enqueue: async () => ({ status: "queued", key: "k", transcriptHash: "h" }),
         runNow: async () => ({ status: "processed", memories_added: 0, memories_filtered: 0 }),
         cancelBySession: async () => 0,
-      } as any,
+      } as unknown as DurableUpdateQueue,
     });
 
     const res = await app.request("/queue/failed/export?limit=10", { method: "GET" });
@@ -41,11 +51,15 @@ describe("API queue admin", () => {
         REQUIRE_API_KEY: false,
         MAX_BODY_BYTES: 1024,
         MAX_UPDATE_BODY_BYTES: 1024,
-      } as any,
-      retriever: { retrieve: async () => ({ entities: [], topics: [], memories: [], context: "" }) } as any,
-      updater: { update: async () => ({ status: "processed", memories_added: 0, memories_filtered: 0 }) } as any,
-      qdrant: {} as any,
-      neo4j: {} as any,
+      } as unknown as DeepMemoryServerConfig,
+      retriever: {
+        retrieve: async () => ({ entities: [], topics: [], memories: [], context: "" }),
+      } as unknown as DeepMemoryRetriever,
+      updater: {
+        update: async () => ({ status: "processed", memories_added: 0, memories_filtered: 0 }),
+      } as unknown as DeepMemoryUpdater,
+      qdrant: {} as unknown as QdrantStore,
+      neo4j: {} as unknown as Neo4jStore,
       queue: {
         stats: () => ({ pendingApprox: 0, active: 0, inflightKeys: 0 }),
         listFailed: async () => [],
@@ -55,7 +69,7 @@ describe("API queue admin", () => {
         enqueue: async () => ({ status: "queued", key: "k", transcriptHash: "h" }),
         runNow: async () => ({ status: "processed", memories_added: 0, memories_filtered: 0 }),
         cancelBySession: async () => 0,
-      } as any,
+      } as unknown as DurableUpdateQueue,
     });
 
     const res = await app.request("/queue/failed/retry", {
@@ -69,4 +83,3 @@ describe("API queue admin", () => {
     expect(json.retried).toBe(2);
   });
 });
-

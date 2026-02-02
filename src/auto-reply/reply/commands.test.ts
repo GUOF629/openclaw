@@ -158,8 +158,22 @@ describe("handleCommands /forget", () => {
   it("calls deep-memory-server /forget in dry-run mode by default", async () => {
     let seenBody: Record<string, unknown> | null = null;
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input).includes("/forget")) {
-        seenBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input instanceof Request
+              ? input.url
+              : "";
+      const bodyText =
+        typeof init?.body === "string"
+          ? init.body
+          : init?.body instanceof Uint8Array
+            ? new TextDecoder().decode(init.body)
+            : "";
+      if (url.includes("/forget")) {
+        seenBody = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : null;
       }
       return new Response(
         JSON.stringify({
@@ -204,8 +218,22 @@ describe("handleCommands /forget", () => {
   it("executes /forget when confirm is provided", async () => {
     let seenBody: Record<string, unknown> | null = null;
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input).includes("/forget")) {
-        seenBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input instanceof Request
+              ? input.url
+              : "";
+      const bodyText =
+        typeof init?.body === "string"
+          ? init.body
+          : init?.body instanceof Uint8Array
+            ? new TextDecoder().decode(init.body)
+            : "";
+      if (url.includes("/forget")) {
+        seenBody = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : null;
       }
       return new Response(
         JSON.stringify({ status: "processed", namespace: "default", deleted: 3 }),
