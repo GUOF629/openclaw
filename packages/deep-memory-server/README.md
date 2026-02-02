@@ -32,3 +32,12 @@ agents: {
 
 See `src/config.ts` for the full env list and defaults (Neo4j/Qdrant URLs, collection name, vector dims, etc.).
 
+Notable knobs:
+
+- `IMPORTANCE_THRESHOLD`: minimum importance to store a memory
+- `DEDUPE_SCORE`: Qdrant similarity above this reuses the existing memory id
+- `DECAY_HALF_LIFE_DAYS`: time decay half-life applied during retrieval ranking
+- `IMPORTANCE_BOOST` / `FREQUENCY_BOOST`: ranking boosts to model “memory growth”
+- `RELATED_TOPK`: build `RELATED_TO` graph edges by linking each new memory to its nearest neighbors
+- `SENSITIVE_FILTER_ENABLED`: drop likely-secret text (tokens/passwords/keys) before storage
+
