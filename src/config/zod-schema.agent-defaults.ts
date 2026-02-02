@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   HeartbeatSchema,
+  DeepMemorySchema,
   MemorySearchSchema,
   SandboxBrowserSchema,
   SandboxDockerSchema,
@@ -53,6 +54,7 @@ export const AgentDefaultsSchema = z
     contextTokens: z.number().int().positive().optional(),
     cliBackends: z.record(z.string(), CliBackendSchema).optional(),
     memorySearch: MemorySearchSchema,
+    deepMemory: DeepMemorySchema,
     contextPruning: z
       .object({
         mode: z.union([z.literal("off"), z.literal("cache-ttl")]).optional(),

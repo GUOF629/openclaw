@@ -410,6 +410,56 @@ export const MemorySearchSchema = z
   })
   .strict()
   .optional();
+
+export const DeepMemorySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    baseUrl: z.string().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+    retrieve: z
+      .object({
+        maxMemories: z.number().int().positive().optional(),
+        cache: z
+          .object({
+            enabled: z.boolean().optional(),
+            ttlMinutes: z.number().int().nonnegative().optional(),
+            maxEntries: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    inject: z
+      .object({
+        maxChars: z.number().int().positive().optional(),
+        label: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    update: z
+      .object({
+        enabled: z.boolean().optional(),
+        thresholds: z
+          .object({
+            deltaBytes: z.number().int().nonnegative().optional(),
+            deltaMessages: z.number().int().nonnegative().optional(),
+          })
+          .strict()
+          .optional(),
+        debounceMs: z.number().int().nonnegative().optional(),
+        nearCompaction: z
+          .object({
+            enabled: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
 export const AgentModelSchema = z.union([
   z.string(),
   z
@@ -428,6 +478,7 @@ export const AgentEntrySchema = z
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
     memorySearch: MemorySearchSchema,
+    deepMemory: DeepMemorySchema,
     humanDelay: HumanDelaySchema.optional(),
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,

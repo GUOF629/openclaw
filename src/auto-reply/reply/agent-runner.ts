@@ -5,6 +5,7 @@ import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { TypingController } from "./typing.js";
 import { lookupContextTokens } from "../../agents/context.js";
+import { resolveDeepMemoryConfig } from "../../agents/deep-memory.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -18,6 +19,7 @@ import {
   updateSessionStore,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import { DeepMemoryClient } from "../../deep-memory/client.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
@@ -43,6 +45,20 @@ import { persistSessionUsageUpdate } from "./session-usage.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+
+function buildDeepMemoryInjectedSystemPrompt(params: {
+  label: string;
+  context: string;
+  maxChars: number;
+}): string {
+  const cleaned = params.context.trim();
+  if (!cleaned) {
+    return "";
+  }
+  const bounded =
+    cleaned.length > params.maxChars ? `${cleaned.slice(0, params.maxChars - 3)}...` : cleaned;
+  return [`[${params.label}]`, bounded].join("\n");
+}
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -213,6 +229,48 @@ export async function runReplyAgent(params: {
     isHeartbeat,
   });
 
+  // Online deep memory injection (programmatic, per-turn).
+  // This is intentionally *not* a tool call: we do it in code so every turn gets recall.
+  const deepMemoryCfg = resolveDeepMemoryConfig(cfg, followupRun.run.agentId);
+  const deepMemoryUserInput = followupRun.deepMemoryUserInput?.trim();
+  const turnRun = await (async () => {
+    if (!deepMemoryCfg || !deepMemoryUserInput) {
+      return followupRun;
+    }
+    // Skip for heartbeats: deep memory is for user-facing conversational continuity.
+    if (isHeartbeat) {
+      return followupRun;
+    }
+    const client = new DeepMemoryClient({
+      baseUrl: deepMemoryCfg.baseUrl,
+      timeoutMs: deepMemoryCfg.timeoutMs,
+      cache: deepMemoryCfg.retrieve.cache,
+    });
+    const retrieved = await client.retrieveContext({
+      userInput: deepMemoryUserInput,
+      sessionId: followupRun.run.sessionId,
+      maxMemories: deepMemoryCfg.retrieve.maxMemories,
+    });
+    const injected = buildDeepMemoryInjectedSystemPrompt({
+      label: deepMemoryCfg.inject.label,
+      context: retrieved.context ?? "",
+      maxChars: deepMemoryCfg.inject.maxChars,
+    });
+    if (!injected) {
+      return followupRun;
+    }
+    const mergedExtraSystemPrompt = [followupRun.run.extraSystemPrompt, injected]
+      .filter(Boolean)
+      .join("\n\n");
+    return {
+      ...followupRun,
+      run: {
+        ...followupRun.run,
+        extraSystemPrompt: mergedExtraSystemPrompt,
+      },
+    };
+  })();
+
   const runFollowupTurn = createFollowupRunner({
     opts,
     typing,
@@ -308,7 +366,7 @@ export async function runReplyAgent(params: {
     const runStartedAt = Date.now();
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
-      followupRun,
+      followupRun: turnRun,
       sessionCtx,
       opts,
       typingSignals,
