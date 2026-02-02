@@ -334,6 +334,13 @@ export type MemorySearchConfig = {
 export type DeepMemoryConfig = {
   /** Enable deep memory (default: false). */
   enabled?: boolean;
+  /**
+   * Optional namespace / tenant key for isolation.
+   *
+   * Use this to prevent cross-user / cross-workspace memory mixing when multiple OpenClaw
+   * instances share the same deep-memory-server + stores.
+   */
+  namespace?: string;
   /** Base URL for the deep memory service (e.g. http://127.0.0.1:8088). */
   baseUrl?: string;
   /** Timeout for deep memory HTTP calls (seconds). */

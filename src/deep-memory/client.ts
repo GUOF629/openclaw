@@ -29,17 +29,20 @@ export class DeepMemoryClient {
   private readonly cacheTtlMs: number;
   private readonly cacheMaxEntries: number;
   private readonly cache = new Map<string, CacheEntry<DeepMemoryRetrieveResponse>>();
+  private readonly namespace?: string;
 
   constructor(params: {
     baseUrl: string;
     timeoutMs: number;
     cache: { enabled: boolean; ttlMs: number; maxEntries: number };
+    namespace?: string;
   }) {
     this.baseUrl = params.baseUrl.replace(/\/+$/, "");
     this.timeoutMs = params.timeoutMs;
     this.cacheEnabled = params.cache.enabled;
     this.cacheTtlMs = params.cache.ttlMs;
     this.cacheMaxEntries = params.cache.maxEntries;
+    this.namespace = params.namespace?.trim() || undefined;
   }
 
   private pruneCache(): void {
@@ -96,7 +99,7 @@ export class DeepMemoryClient {
     if (!input) {
       return {};
     }
-    const key = `${params.sessionId}::${params.maxMemories}::${input}`;
+    const key = `${this.namespace ?? ""}::${params.sessionId}::${params.maxMemories}::${input}`;
     if (this.cacheEnabled && this.cacheTtlMs > 0) {
       this.pruneCache();
       const cached = this.cache.get(key);
@@ -106,6 +109,7 @@ export class DeepMemoryClient {
     }
     try {
       const value = await this.postJson<DeepMemoryRetrieveResponse>("/retrieve_context", {
+        namespace: this.namespace,
         user_input: input,
         session_id: params.sessionId,
         max_memories: params.maxMemories,
@@ -127,6 +131,7 @@ export class DeepMemoryClient {
   }): Promise<DeepMemoryUpdateResponse> {
     try {
       return await this.postJson<DeepMemoryUpdateResponse>("/update_memory_index", {
+        namespace: this.namespace,
         session_id: params.sessionId,
         messages: params.messages,
         async: params.async,

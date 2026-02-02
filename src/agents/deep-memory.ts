@@ -5,6 +5,7 @@ import { resolveAgentConfig } from "./agent-scope.js";
 
 export type ResolvedDeepMemoryConfig = {
   enabled: boolean;
+  namespace: string;
   baseUrl: string;
   timeoutMs: number;
   retrieve: {
@@ -28,6 +29,7 @@ const DEFAULT_TIMEOUT_SECONDS = 2;
 const DEFAULT_UPDATE_DEBOUNCE_MS = 5000;
 const DEFAULT_UPDATE_DELTA_BYTES = 100_000;
 const DEFAULT_UPDATE_DELTA_MESSAGES = 50;
+const DEFAULT_NAMESPACE = "default";
 
 function mergeConfig(
   defaults: DeepMemoryConfig | undefined,
@@ -73,6 +75,7 @@ export function resolveDeepMemoryConfig(
   const merged = mergeConfig(defaults, overrides);
 
   const enabled = merged.enabled ?? false;
+  const namespace = (merged.namespace ?? DEFAULT_NAMESPACE).trim() || DEFAULT_NAMESPACE;
   const baseUrl = (merged.baseUrl ?? "").trim();
   if (!enabled || !baseUrl) {
     return null;
@@ -114,6 +117,7 @@ export function resolveDeepMemoryConfig(
 
   return {
     enabled: true,
+    namespace,
     baseUrl,
     timeoutMs,
     retrieve: {
