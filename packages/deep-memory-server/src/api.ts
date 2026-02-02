@@ -8,7 +8,7 @@ import { extractHintsFromText } from "./analyzer.js";
 import type { QdrantStore } from "./qdrant.js";
 import type { Neo4jStore } from "./neo4j.js";
 import type { DurableUpdateQueue } from "./durable-update-queue.js";
-import { requireApiKey, requireApiKeyForPaths } from "./auth.js";
+import { createAuthz } from "./authz.js";
 import { enforceBodySize, readJsonWithLimit } from "./body-limit.js";
 import { appendAuditLog } from "./audit-log.js";
 
@@ -52,14 +52,19 @@ export function createApi(params: {
   queue: DurableUpdateQueue;
 }) {
   const app = new Hono();
+  const authz = createAuthz(params.cfg);
 
   app.use("*", enforceBodySize(params.cfg));
-  // Always protect destructive/admin endpoints. Retrieve can be protected via REQUIRE_API_KEY/API_KEY.
-  app.use("*", requireApiKeyForPaths(params.cfg, { prefix: "/queue" }));
-  app.use("/forget", requireApiKey(params.cfg));
-  app.use("/update_memory_index", requireApiKey(params.cfg));
-  if (params.cfg.REQUIRE_API_KEY || params.cfg.API_KEY || params.cfg.API_KEYS) {
-    app.use("/retrieve_context", requireApiKey(params.cfg));
+  // Permission matrix:
+  // - retrieve_context: read
+  // - update_memory_index: write
+  // - forget: admin
+  // - queue/*: admin
+  app.use("*", authz.requirePrefix("/queue", "admin"));
+  app.use("/forget", authz.requireRole("admin"));
+  app.use("/update_memory_index", authz.requireRole("write"));
+  if (authz.required) {
+    app.use("/retrieve_context", authz.requireRole("read"));
   }
 
   app.get("/health", (c) => c.json({ ok: true }));
@@ -78,6 +83,10 @@ export function createApi(params: {
     }
     const req = parsed.data;
     const namespace = req.namespace?.trim() || "default";
+    const nsCheck = authz.assertNamespace(c, namespace);
+    if (!nsCheck.ok) {
+      return c.json(nsCheck.body, nsCheck.status);
+    }
     const maxMemories = req.max_memories ?? 10;
     const hints = extractHintsFromText(req.user_input);
     const out: RetrieveContextResponse = await params.retriever.retrieve({
@@ -105,6 +114,10 @@ export function createApi(params: {
     }
     const req = parsed.data;
     const namespace = req.namespace?.trim() || "default";
+    const nsCheck = authz.assertNamespace(c, namespace);
+    if (!nsCheck.ok) {
+      return c.json(nsCheck.body, nsCheck.status);
+    }
     const runAsync = req.async ?? true;
 
     if (runAsync) {
@@ -137,6 +150,10 @@ export function createApi(params: {
     }
     const req = parsed.data;
     const namespace = req.namespace?.trim() || "default";
+    const nsCheck = authz.assertNamespace(c, namespace);
+    if (!nsCheck.ok) {
+      return c.json(nsCheck.body, nsCheck.status);
+    }
     const dryRun = req.dry_run ?? false;
 
     const ids = (req.memory_ids ?? []).map((id) => id.trim()).filter(Boolean);
@@ -152,6 +169,7 @@ export function createApi(params: {
         requester: {
           ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? undefined,
           userAgent: c.req.header("user-agent") ?? undefined,
+          keyId: authz.getAuth(c)?.keyId,
         },
       }).catch(() => {});
       return c.json({
@@ -193,6 +211,7 @@ export function createApi(params: {
       requester: {
         ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? undefined,
         userAgent: c.req.header("user-agent") ?? undefined,
+        keyId: authz.getAuth(c)?.keyId,
       },
     }).catch(() => {});
     return c.json({ status: "processed", namespace, deleted });
@@ -214,6 +233,12 @@ export function createApi(params: {
     const key = c.req.query("key") ?? undefined;
     const limitRaw = c.req.query("limit");
     const limit = Math.max(1, Math.min(200, Number(limitRaw ?? 50) || 50));
+
+    const ns = key ? authz.extractNamespaceFromKey(key) : null;
+    if (ns) {
+      const nsCheck = authz.assertNamespace(c, ns);
+      if (!nsCheck.ok) return c.json(nsCheck.body, nsCheck.status);
+    }
     const out = await params.queue.exportFailed({ file, key, limit });
     await appendAuditLog(params.cfg, {
       action: "queue_failed_export",
@@ -223,6 +248,7 @@ export function createApi(params: {
       requester: {
         ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? undefined,
         userAgent: c.req.header("user-agent") ?? undefined,
+        keyId: authz.getAuth(c)?.keyId,
       },
     }).catch(() => {});
     return c.json({ ok: true, ...out });
@@ -241,6 +267,13 @@ export function createApi(params: {
     const dryRun = Boolean((body as any).dry_run);
     const limit = Math.max(1, Math.min(200, Number((body as any).limit ?? 50) || 50));
     if (file) {
+      // Namespace binding for file retry: peek meta via export first.
+      const meta = await params.queue.exportFailed({ file, limit: 1 });
+      const ns = meta.mode === "file" ? meta.item.namespace : null;
+      if (ns) {
+        const nsCheck = authz.assertNamespace(c, ns);
+        if (!nsCheck.ok) return c.json(nsCheck.body, nsCheck.status);
+      }
       if (dryRun) {
         await appendAuditLog(params.cfg, {
           action: "queue_failed_retry",
@@ -249,6 +282,7 @@ export function createApi(params: {
           requester: {
             ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? undefined,
             userAgent: c.req.header("user-agent") ?? undefined,
+            keyId: authz.getAuth(c)?.keyId,
           },
         }).catch(() => {});
         return c.json({ ok: true, mode: "file", status: "dry_run" });
@@ -261,11 +295,17 @@ export function createApi(params: {
         requester: {
           ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? undefined,
           userAgent: c.req.header("user-agent") ?? undefined,
+          keyId: authz.getAuth(c)?.keyId,
         },
       }).catch(() => {});
       return c.json({ ok: true, mode: "file", ...out });
     }
     if (key) {
+      const ns = authz.extractNamespaceFromKey(key);
+      if (ns) {
+        const nsCheck = authz.assertNamespace(c, ns);
+        if (!nsCheck.ok) return c.json(nsCheck.body, nsCheck.status);
+      }
       const out = await params.queue.retryFailedByKey({ key, limit, dryRun });
       await appendAuditLog(params.cfg, {
         action: "queue_failed_retry",
@@ -276,6 +316,7 @@ export function createApi(params: {
         requester: {
           ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? undefined,
           userAgent: c.req.header("user-agent") ?? undefined,
+          keyId: authz.getAuth(c)?.keyId,
         },
       }).catch(() => {});
       return c.json({ ok: true, mode: "key", ...out });

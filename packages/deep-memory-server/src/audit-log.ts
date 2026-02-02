@@ -6,6 +6,7 @@ import type { DeepMemoryServerConfig } from "./config.js";
 export type AuditRequester = {
   ip?: string;
   userAgent?: string;
+  keyId?: string;
 };
 
 type ForgetAuditEntry = {

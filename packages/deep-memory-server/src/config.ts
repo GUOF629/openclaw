@@ -5,6 +5,7 @@ const EnvSchema = z.object({
   HOST: z.string().default("0.0.0.0"),
   API_KEY: z.string().optional(),
   API_KEYS: z.string().optional(),
+  API_KEYS_JSON: z.string().optional(),
   REQUIRE_API_KEY: z.coerce.boolean().default(false),
   MAX_BODY_BYTES: z.coerce.number().int().positive().default(256 * 1024),
   MAX_UPDATE_BODY_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024),
