@@ -90,7 +90,12 @@ services:
       EMBEDDING_MODEL: "${OPENCLAW_DEEPMEM_EMBEDDING_MODEL:-Xenova/bge-small-en-v1.5}"
     volumes:
       - ./:/app
-    command: ["sh", "-lc", "corepack enable && pnpm -s install && pnpm -s --dir packages/deep-memory-server dev"]
+    command:
+      [
+        "sh",
+        "-lc",
+        "corepack enable && pnpm -s install && pnpm -s --dir packages/deep-memory-server dev",
+      ]
     ports:
       - "${OPENCLAW_DEEPMEM_PORT:-8088}:8088"
     depends_on:
