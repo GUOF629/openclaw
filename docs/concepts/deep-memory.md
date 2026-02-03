@@ -45,6 +45,7 @@ For production operations and monitoring, see:
 
 - [Deep memory ops](/reference/deep-memory-ops)
 - [Deep memory alerting](/reference/deep-memory-alerting)
+- [Deep memory on Kubernetes](/reference/deep-memory-kubernetes)
 
 ## Security checklist
 

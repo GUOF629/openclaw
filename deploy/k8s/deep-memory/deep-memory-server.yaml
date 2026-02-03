@@ -1,0 +1,127 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: deep-memory-server
+  labels:
+    app.kubernetes.io/name: deep-memory-server
+spec:
+  selector:
+    app.kubernetes.io/name: deep-memory-server
+  ports:
+    - name: http
+      port: 8088
+      targetPort: 8088
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: deep-memory-server-secrets
+type: Opaque
+stringData:
+  # REQUIRED in production: configure API keys and limit namespaces.
+  # Example:
+  # [
+  #   { "key": "<read-key>", "role": "read", "namespaces": ["teamA"] },
+  #   { "key": "<write-key>", "role": "write", "namespaces": ["teamA"] },
+  #   { "key": "<admin-key>", "role": "admin", "namespaces": ["teamA"] }
+  # ]
+  API_KEYS_JSON: "[]"
+  # Optional: set if Qdrant is secured.
+  QDRANT_API_KEY: ""
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: deep-memory-server-config
+data:
+  PORT: "8088"
+  HOST: "0.0.0.0"
+  REQUIRE_API_KEY: "true"
+  # In Kubernetes, prefer keeping /metrics behind NetworkPolicy; leave this false by default.
+  ALLOW_UNAUTHENTICATED_METRICS: "false"
+
+  QDRANT_URL: "http://qdrant:6333"
+  QDRANT_COLLECTION: "openclaw_memories"
+  VECTOR_DIMS: "384"
+
+  NEO4J_URI: "bolt://neo4j:7687"
+  NEO4J_USER: "neo4j"
+
+  LOG_LEVEL: "info"
+  UPDATE_CONCURRENCY: "1"
+  QUEUE_DIR: "/data/queue"
+  AUDIT_LOG_PATH: "/data/audit/audit.jsonl"
+  EMBEDDING_MODEL: "Xenova/bge-small-en-v1.5"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deep-memory-server
+  labels:
+    app.kubernetes.io/name: deep-memory-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: deep-memory-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: deep-memory-server
+    spec:
+      containers:
+        - name: deep-memory-server
+          # Build and push your own image from packages/deep-memory-server/Dockerfile
+          # then set this to your registry.
+          image: "openclaw/deep-memory-server:local"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8088
+          envFrom:
+            - configMapRef:
+                name: deep-memory-server-config
+            - secretRef:
+                name: deep-memory-server-secrets
+          env:
+            - name: NEO4J_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: neo4j-auth
+                  key: password
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8088
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8088
+            initialDelaySeconds: 10
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: deep-memory-server-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: deep-memory-server-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
