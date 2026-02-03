@@ -103,6 +103,7 @@ async function main() {
 
   const app = createApi({
     cfg,
+    log,
     retriever,
     updater,
     qdrant,

@@ -1,4 +1,6 @@
+import type { Logger } from "pino";
 import { Hono } from "hono";
+import crypto from "node:crypto";
 import { z } from "zod";
 import type { DeepMemoryServerConfig } from "./config.js";
 import type { DurableUpdateQueue } from "./durable-update-queue.js";
@@ -46,6 +48,7 @@ const ForgetSchema = z
 
 export function createApi(params: {
   cfg: DeepMemoryServerConfig;
+  log?: Logger;
   retriever: DeepMemoryRetriever;
   updater: DeepMemoryUpdater;
   qdrant: QdrantStore;
@@ -78,6 +81,44 @@ export function createApi(params: {
   };
 
   app.use("*", enforceBodySize(params.cfg));
+
+  // Request logger: stable request id + latency + auth keyId (never log raw API key).
+  app.use("*", async (c, next) => {
+    const incoming = c.req.header("x-request-id")?.trim() || "";
+    const requestId =
+      incoming.length > 0 && incoming.length <= 128 ? incoming : crypto.randomUUID();
+    c.header("x-request-id", requestId);
+    const start = performance.now();
+    try {
+      await next();
+    } catch (err) {
+      params.log?.error(
+        {
+          requestId,
+          method: c.req.method,
+          path: c.req.path,
+          keyId: authz.getAuth(c)?.keyId,
+          err: err instanceof Error ? err.message : String(err),
+        },
+        "request error",
+      );
+      throw err;
+    } finally {
+      const status = c.res?.status ?? 500;
+      const ms = Math.max(0, Math.round(performance.now() - start));
+      params.log?.info(
+        {
+          requestId,
+          method: c.req.method,
+          path: c.req.path,
+          status,
+          ms,
+          keyId: authz.getAuth(c)?.keyId,
+        },
+        "request",
+      );
+    }
+  });
   // Permission matrix:
   // - retrieve_context: read
   // - update_memory_index: write
