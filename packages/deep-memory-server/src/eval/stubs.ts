@@ -40,6 +40,7 @@ export function createRetrieverForEval(params: {
   const qdrant: FakeQdrant = {
     search: async (p) => {
       const filtered = params.evalCase.qdrantHits
+        .filter((h) => (!p.namespace ? true : h.id.startsWith(`${p.namespace}::`)))
         .filter((h) => h.score >= p.minScore)
         .slice(0, Math.max(0, p.limit));
       return filtered.map((h) => ({ id: h.id, score: h.score, payload: h.payload }));
