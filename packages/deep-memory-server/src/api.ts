@@ -520,7 +520,10 @@ export function createApi(params: {
         results.neo4j!.bySession = { ok: false, error: "neo4j deleteMemoriesBySession failed" };
       }
       try {
-        const cancelled = await params.queue.cancelBySession({ namespace, sessionId: req.session_id });
+        const cancelled = await params.queue.cancelBySession({
+          namespace,
+          sessionId: req.session_id,
+        });
         results.queue = { ok: true, cancelled };
       } catch {
         results.queue = { ok: false, cancelled: 0, error: "queue cancelBySession failed" };

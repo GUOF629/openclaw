@@ -1,17 +1,20 @@
-import { describe, expect, it, vi } from "vitest";
-import { createApi } from "./api.js";
+import { describe, expect, it } from "vitest";
 import type { DeepMemoryServerConfig } from "./config.js";
 import type { DurableUpdateQueue } from "./durable-update-queue.js";
 import type { Neo4jStore } from "./neo4j.js";
 import type { QdrantStore } from "./qdrant.js";
 import type { DeepMemoryRetriever } from "./retriever.js";
 import type { DeepMemoryUpdater } from "./updater.js";
+import { createApi } from "./api.js";
 
-function createStubApi(cfg: DeepMemoryServerConfig, overrides?: Partial<{
-  qdrant: Partial<QdrantStore>;
-  neo4j: Partial<Neo4jStore>;
-  queue: Partial<DurableUpdateQueue>;
-}>) {
+function createStubApi(
+  cfg: DeepMemoryServerConfig,
+  overrides?: Partial<{
+    qdrant: Partial<QdrantStore>;
+    neo4j: Partial<Neo4jStore>;
+    queue: Partial<DurableUpdateQueue>;
+  }>,
+) {
   return createApi({
     cfg,
     retriever: {
@@ -23,12 +26,12 @@ function createStubApi(cfg: DeepMemoryServerConfig, overrides?: Partial<{
     qdrant: {
       deleteByIds: async ({ ids }: { ids: string[] }) => ids.length,
       deleteBySession: async () => {},
-      ...(overrides?.qdrant ?? {}),
+      ...overrides?.qdrant,
     } as unknown as QdrantStore,
     neo4j: {
       deleteMemoriesByIds: async ({ ids }: { ids: string[] }) => ids.length,
       deleteMemoriesBySession: async () => 0,
-      ...(overrides?.neo4j ?? {}),
+      ...overrides?.neo4j,
     } as unknown as Neo4jStore,
     queue: {
       stats: () => ({ pendingApprox: 0, active: 0, inflightKeys: 0 }),
@@ -39,7 +42,7 @@ function createStubApi(cfg: DeepMemoryServerConfig, overrides?: Partial<{
       enqueue: async () => ({ status: "queued", key: "k", transcriptHash: "h" }),
       runNow: async () => ({ status: "processed", memories_added: 0, memories_filtered: 0 }),
       cancelBySession: async () => 1,
-      ...(overrides?.queue ?? {}),
+      ...overrides?.queue,
     } as unknown as DurableUpdateQueue,
   });
 }
@@ -100,7 +103,11 @@ describe("/forget proof-ish response", () => {
 
   it("includes request_id and per-backend results", async () => {
     const app = createStubApi(cfg, {
-      qdrant: { deleteByIds: async () => { throw new Error("boom"); } },
+      qdrant: {
+        deleteByIds: async () => {
+          throw new Error("boom");
+        },
+      },
     });
 
     const res = await app.request("/forget", {
@@ -131,4 +138,3 @@ describe("/forget proof-ish response", () => {
     expect(json.delete_session).toBe(1);
   });
 });
-
