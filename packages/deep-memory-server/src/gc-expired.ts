@@ -1,5 +1,5 @@
-import process from "node:process";
 import fs from "node:fs/promises";
+import process from "node:process";
 import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { Neo4jStore } from "./neo4j.js";
@@ -21,7 +21,9 @@ function parseArgs(argv: string[]): Args {
   const out: Args = { allNamespaces: false, batchSize: 200, deleteBatch: 100, dryRun: false };
   for (let i = 0; i < argv.length; i += 1) {
     const t = argv[i]?.trim();
-    if (!t) continue;
+    if (!t) {
+      continue;
+    }
     if (t === "--namespace" || t === "-n") {
       out.namespace = argv[i + 1]?.trim();
       i += 1;
@@ -33,19 +35,25 @@ function parseArgs(argv: string[]): Args {
     }
     if (t === "--batch-size") {
       const v = Number(argv[i + 1]);
-      if (Number.isFinite(v) && v > 0) out.batchSize = Math.max(1, Math.min(1000, Math.floor(v)));
+      if (Number.isFinite(v) && v > 0) {
+        out.batchSize = Math.max(1, Math.min(1000, Math.floor(v)));
+      }
       i += 1;
       continue;
     }
     if (t === "--delete-batch") {
       const v = Number(argv[i + 1]);
-      if (Number.isFinite(v) && v > 0) out.deleteBatch = Math.max(1, Math.min(1000, Math.floor(v)));
+      if (Number.isFinite(v) && v > 0) {
+        out.deleteBatch = Math.max(1, Math.min(1000, Math.floor(v)));
+      }
       i += 1;
       continue;
     }
     if (t === "--max-items") {
       const v = Number(argv[i + 1]);
-      if (Number.isFinite(v) && v > 0) out.maxItems = Math.max(1, Math.floor(v));
+      if (Number.isFinite(v) && v > 0) {
+        out.maxItems = Math.max(1, Math.floor(v));
+      }
       i += 1;
       continue;
     }
@@ -56,7 +64,9 @@ function parseArgs(argv: string[]): Args {
     }
     if (t === "--out") {
       const v = argv[i + 1]?.trim();
-      if (v) out.outFile = v;
+      if (v) {
+        out.outFile = v;
+      }
       i += 1;
       continue;
     }
@@ -85,14 +95,18 @@ Options:
   }
   if (!out.allNamespaces) {
     out.namespace = out.namespace?.trim() || undefined;
-    if (!out.namespace) throw new Error("missing --namespace (or use --all-namespaces)");
+    if (!out.namespace) {
+      throw new Error("missing --namespace (or use --all-namespaces)");
+    }
   }
   return out;
 }
 
 function isExpired(expiresAt: string | undefined, nowMs: number): boolean {
   const t = (expiresAt ?? "").trim();
-  if (!t) return false;
+  if (!t) {
+    return false;
+  }
   const ms = Date.parse(t);
   return Number.isFinite(ms) && ms > 0 && ms <= nowMs;
 }
@@ -102,9 +116,15 @@ async function main() {
   const cfg = loadConfig();
   const log = createLogger(cfg.LOG_LEVEL);
   const targetCollection = (args.targetCollection ?? cfg.QDRANT_COLLECTION).trim();
-  if (!targetCollection) throw new Error("empty target collection");
+  if (!targetCollection) {
+    throw new Error("empty target collection");
+  }
 
-  const neo4j = new Neo4jStore({ uri: cfg.NEO4J_URI, user: cfg.NEO4J_USER, password: cfg.NEO4J_PASSWORD });
+  const neo4j = new Neo4jStore({
+    uri: cfg.NEO4J_URI,
+    user: cfg.NEO4J_USER,
+    password: cfg.NEO4J_PASSWORD,
+  });
   const qdrant = new QdrantStore({
     url: cfg.QDRANT_URL,
     apiKey: cfg.QDRANT_API_KEY,
@@ -113,7 +133,9 @@ async function main() {
   });
   await qdrant.schemaStatus({ mode: "validate", expectedVersion: DEEPMEM_SCHEMA_VERSION });
 
-  const namespaces = args.allNamespaces ? await neo4j.listNamespaces({ limit: 10_000 }) : [args.namespace!];
+  const namespaces = args.allNamespaces
+    ? await neo4j.listNamespaces({ limit: 10_000 })
+    : [args.namespace!];
 
   const nowMs = Date.now();
   const report: {
@@ -144,11 +166,15 @@ async function main() {
       const batchIds: string[] = [];
       while (true) {
         const page = await neo4j.scanMemories({ namespace: ns, afterId, limit: args.batchSize });
-        if (page.length === 0) break;
+        if (page.length === 0) {
+          break;
+        }
         for (const m of page) {
           report.scanned += 1;
           afterId = m.id;
-          if (args.maxItems && report.scanned >= args.maxItems) break;
+          if (args.maxItems && report.scanned >= args.maxItems) {
+            break;
+          }
           if (isExpired(m.expiresAt, nowMs)) {
             report.expiredFound += 1;
             batchIds.push(m.id);
@@ -162,7 +188,10 @@ async function main() {
                 report.ok = false;
               }
               try {
-                report.neo4jDeleted += await neo4j.deleteMemoriesByIds({ namespace: ns, ids: batchIds });
+                report.neo4jDeleted += await neo4j.deleteMemoriesByIds({
+                  namespace: ns,
+                  ids: batchIds,
+                });
               } catch {
                 report.failedBatches += 1;
                 report.ok = false;
@@ -171,7 +200,9 @@ async function main() {
             batchIds.length = 0;
           }
         }
-        if (args.maxItems && report.scanned >= args.maxItems) break;
+        if (args.maxItems && report.scanned >= args.maxItems) {
+          break;
+        }
       }
       if (batchIds.length > 0) {
         if (!args.dryRun) {
@@ -182,7 +213,10 @@ async function main() {
             report.ok = false;
           }
           try {
-            report.neo4jDeleted += await neo4j.deleteMemoriesByIds({ namespace: ns, ids: batchIds });
+            report.neo4jDeleted += await neo4j.deleteMemoriesByIds({
+              namespace: ns,
+              ids: batchIds,
+            });
           } catch {
             report.failedBatches += 1;
             report.ok = false;
@@ -214,4 +248,3 @@ void main().catch((err) => {
   console.error(String(err instanceof Error ? (err.stack ?? err.message) : err));
   process.exit(1);
 });
-
