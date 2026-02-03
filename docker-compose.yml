@@ -76,6 +76,8 @@ services:
     environment:
       PORT: 8088
       HOST: 0.0.0.0
+      REQUIRE_API_KEY: "${OPENCLAW_DEEPMEM_REQUIRE_API_KEY:-false}"
+      API_KEYS_JSON: "${OPENCLAW_DEEPMEM_API_KEYS_JSON:-}"
       QDRANT_URL: "http://qdrant:6333"
       QDRANT_COLLECTION: "${OPENCLAW_DEEPMEM_COLLECTION:-openclaw_memories}"
       VECTOR_DIMS: "${OPENCLAW_DEEPMEM_DIMS:-384}"
@@ -103,6 +105,53 @@ services:
       - neo4j
     restart: unless-stopped
 
+  # Production-oriented deep-memory-server (built image + persistent queue dir).
+  # Enable via: docker compose --profile deep-memory-prod up -d
+  deep-memory-server-prod:
+    profiles: ["deep-memory-prod"]
+    build:
+      context: .
+      dockerfile: packages/deep-memory-server/Dockerfile
+    environment:
+      PORT: 8088
+      HOST: 0.0.0.0
+      REQUIRE_API_KEY: "${OPENCLAW_DEEPMEM_REQUIRE_API_KEY:-true}"
+      API_KEYS_JSON: "${OPENCLAW_DEEPMEM_API_KEYS_JSON:-}"
+      QDRANT_URL: "http://qdrant:6333"
+      QDRANT_COLLECTION: "${OPENCLAW_DEEPMEM_COLLECTION:-openclaw_memories}"
+      VECTOR_DIMS: "${OPENCLAW_DEEPMEM_DIMS:-384}"
+      MIN_SEMANTIC_SCORE: "${OPENCLAW_DEEPMEM_MIN_SEMANTIC_SCORE:-0.6}"
+      NEO4J_URI: "bolt://neo4j:7687"
+      NEO4J_USER: "neo4j"
+      NEO4J_PASSWORD: "${OPENCLAW_NEO4J_PASSWORD:-openclaw}"
+      LOG_LEVEL: "${OPENCLAW_DEEPMEM_LOG_LEVEL:-info}"
+      RETRIEVE_CACHE_TTL_MS: "${OPENCLAW_DEEPMEM_CACHE_TTL_MS:-300000}"
+      RETRIEVE_CACHE_MAX: "${OPENCLAW_DEEPMEM_CACHE_MAX:-500}"
+      UPDATE_CONCURRENCY: "${OPENCLAW_DEEPMEM_UPDATE_CONCURRENCY:-1}"
+      EMBEDDING_MODEL: "${OPENCLAW_DEEPMEM_EMBEDDING_MODEL:-Xenova/bge-small-en-v1.5}"
+      QUEUE_DIR: "/data/queue"
+      AUDIT_LOG_PATH: "/data/audit/audit.jsonl"
+    volumes:
+      - deepmem_data:/data
+    ports:
+      - "${OPENCLAW_DEEPMEM_PORT:-8088}:8088"
+    depends_on:
+      - qdrant
+      - neo4j
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8088/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
 volumes:
   qdrant_data:
   neo4j_data:
+  deepmem_data:

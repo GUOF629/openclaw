@@ -15,6 +15,12 @@ The repo root `docker-compose.yml` includes an optional profile:
 docker compose --profile deep-memory up
 ```
 
+For production-oriented usage (built image + persistent queue/audit volumes), use:
+
+```bash
+docker compose --profile deep-memory-prod up -d
+```
+
 Then point OpenClaw at the service:
 
 ```json5
@@ -28,6 +34,12 @@ agents: {
 }
 ```
 
+## Endpoints
+
+- `GET /health`: liveness + queue stats
+- `GET /readyz`: readiness (Qdrant + Neo4j + queue stats; returns 503 on dependency failure)
+- `GET /metrics`: Prometheus metrics (admin-only when API keys are required)
+
 ## Environment
 
 See `src/config.ts` for the full env list and defaults (Neo4j/Qdrant URLs, collection name, vector dims, etc.).
@@ -40,3 +52,9 @@ Notable knobs:
 - `IMPORTANCE_BOOST` / `FREQUENCY_BOOST`: ranking boosts to model “memory growth”
 - `RELATED_TOPK`: build `RELATED_TO` graph edges by linking each new memory to its nearest neighbors
 - `SENSITIVE_FILTER_ENABLED`: drop likely-secret text (tokens/passwords/keys) before storage
+
+## Production notes
+
+- Strongly recommended: set `REQUIRE_API_KEY=true` and configure `API_KEYS_JSON` with per-role keys (`read`, `write`, `admin`).
+- Keep `QUEUE_DIR` on persistent storage (container volume) so async ingestion survives restarts.
+- Use `/metrics` + `/readyz` for monitoring and alerting (queue backlog, error rates, dependency availability).
