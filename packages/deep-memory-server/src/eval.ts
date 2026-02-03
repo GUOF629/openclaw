@@ -263,7 +263,9 @@ async function main() {
       }
     }
     for (const c of snapshot.cases) {
-      if (c.ok) continue;
+      if (c.ok) {
+        continue;
+      }
       // eslint-disable-next-line no-console
       console.log(`- FAIL: ${c.name}`);
       // eslint-disable-next-line no-console
