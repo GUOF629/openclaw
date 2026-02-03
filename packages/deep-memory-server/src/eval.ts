@@ -286,7 +286,21 @@ async function main() {
   for (const minSemanticScore of [0.4, 0.5, 0.6, 0.7]) {
     for (const semanticWeight of [0.5, 0.6, 0.7]) {
       const relationWeight = 1 - semanticWeight;
-      sweeps.push({ ...base, minSemanticScore, semanticWeight, relationWeight });
+      for (const decayHalfLifeDays of [30, 90, 180]) {
+        for (const importanceBoost of [0.2, 0.3, 0.5]) {
+          for (const frequencyBoost of [0.1, 0.2, 0.4]) {
+            sweeps.push({
+              ...base,
+              minSemanticScore,
+              semanticWeight,
+              relationWeight,
+              decayHalfLifeDays,
+              importanceBoost,
+              frequencyBoost,
+            });
+          }
+        }
+      }
     }
   }
 
@@ -304,6 +318,20 @@ async function main() {
   console.log(
     `sweep: best ok=${best.ok} score=${best.score.toFixed(4)} knobs=${JSON.stringify(best.knobs)}`,
   );
+  // eslint-disable-next-line no-console
+  console.log("sweep: recommended env:");
+  // eslint-disable-next-line no-console
+  console.log(`  MIN_SEMANTIC_SCORE=${best.knobs.minSemanticScore}`);
+  // eslint-disable-next-line no-console
+  console.log(`  SEMANTIC_WEIGHT=${best.knobs.semanticWeight}`);
+  // eslint-disable-next-line no-console
+  console.log(`  RELATION_WEIGHT=${best.knobs.relationWeight}`);
+  // eslint-disable-next-line no-console
+  console.log(`  DECAY_HALF_LIFE_DAYS=${best.knobs.decayHalfLifeDays}`);
+  // eslint-disable-next-line no-console
+  console.log(`  IMPORTANCE_BOOST=${best.knobs.importanceBoost}`);
+  // eslint-disable-next-line no-console
+  console.log(`  FREQUENCY_BOOST=${best.knobs.frequencyBoost}`);
   process.exit(best.ok ? 0 : 2);
 }
 
