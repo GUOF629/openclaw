@@ -41,6 +41,11 @@ docker compose --profile deep-memory-prod up -d
 - `GET /readyz`: readiness (Qdrant + Neo4j)
 - `GET /metrics`: Prometheus metrics (admin-only when API keys are required)
 
+For production operations and monitoring, see:
+
+- [Deep memory ops](/reference/deep-memory-ops)
+- [Deep memory alerting](/reference/deep-memory-alerting)
+
 ## Security checklist
 
 - Set `REQUIRE_API_KEY=true`
