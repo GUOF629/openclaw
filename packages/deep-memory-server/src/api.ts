@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 import type { DeepMemoryServerConfig } from "./config.js";
+import type { DurableForgetQueue } from "./durable-forget-queue.js";
 import type { DurableUpdateQueue } from "./durable-update-queue.js";
 import type { DeepMemoryMetrics } from "./metrics.js";
 import type { Neo4jStore } from "./neo4j.js";
@@ -73,6 +74,7 @@ const ForgetSchema = z
     memory_ids: z.array(z.string()).optional(),
     session_id: z.string().optional(),
     dry_run: z.boolean().optional(),
+    async: z.boolean().optional(),
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -92,6 +94,7 @@ export function createApi(params: {
   qdrant: QdrantStore;
   neo4j: Neo4jStore;
   queue: DurableUpdateQueue;
+  forgetQueue: DurableForgetQueue;
   metrics?: DeepMemoryMetrics;
 }) {
   const app = new Hono();
@@ -465,6 +468,7 @@ export function createApi(params: {
       return c.json(nsCheck.body, nsCheck.status);
     }
     const dryRun = req.dry_run ?? false;
+    const runAsync = req.async ?? false;
 
     const ids = (req.memory_ids ?? []).map((id) => id.trim()).filter(Boolean);
     const normalizedIds = ids.map((id) => (id.includes("::") ? id : `${namespace}::${id}`));
@@ -488,6 +492,40 @@ export function createApi(params: {
         status: "dry_run",
         namespace,
         request_id: requestId,
+        delete_ids: normalizedIds.length,
+        delete_session: req.session_id ? 1 : 0,
+      });
+    }
+
+    if (runAsync) {
+      const out = await params.forgetQueue.enqueue({
+        namespace,
+        sessionId: req.session_id ?? undefined,
+        memoryIds: normalizedIds,
+      });
+      await appendAuditLog(params.cfg, {
+        action: "forget",
+        namespace,
+        requestId,
+        dryRun: false,
+        sessionId: req.session_id ?? undefined,
+        memoryIdsCount: normalizedIds.length,
+        deletedReported: 0,
+        results: {
+          queue: { ok: true, cancelled: 0 },
+        },
+        requester: {
+          ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? undefined,
+          userAgent: c.req.header("user-agent") ?? undefined,
+          keyId: authz.getAuth(c)?.keyId,
+        },
+      }).catch(() => {});
+      return c.json({
+        status: "queued",
+        namespace,
+        request_id: requestId,
+        key: out.key,
+        task_id: out.taskId,
         delete_ids: normalizedIds.length,
         delete_session: req.session_id ? 1 : 0,
       });
@@ -569,6 +607,132 @@ export function createApi(params: {
       return c.json({ error: "rate_limited" }, 429);
     }
     return c.json({ ok: true, ...params.queue.stats() });
+  });
+
+  app.get("/queue/forget/stats", (c) => {
+    const rl = checkRateLimit(c, "/queue", params.cfg.RATE_LIMIT_QUEUE_ADMIN_PER_WINDOW);
+    if (!rl.ok) {
+      return c.json({ error: "rate_limited" }, 429);
+    }
+    return c.json({ ok: true, ...params.forgetQueue.stats() });
+  });
+
+  app.get("/queue/forget/failed", async (c) => {
+    const rl = checkRateLimit(c, "/queue", params.cfg.RATE_LIMIT_QUEUE_ADMIN_PER_WINDOW);
+    if (!rl.ok) {
+      return c.json({ error: "rate_limited" }, 429);
+    }
+    const limitRaw = c.req.query("limit");
+    const limit = Math.max(1, Math.min(200, Number(limitRaw ?? 50) || 50));
+    const items = await params.forgetQueue.listFailed({ limit });
+    return c.json({ ok: true, items });
+  });
+
+  app.get("/queue/forget/failed/export", async (c) => {
+    const rl = checkRateLimit(c, "/queue", params.cfg.RATE_LIMIT_QUEUE_ADMIN_PER_WINDOW);
+    if (!rl.ok) {
+      return c.json({ error: "rate_limited" }, 429);
+    }
+    const file = c.req.query("file") ?? undefined;
+    const key = c.req.query("key") ?? undefined;
+    const limitRaw = c.req.query("limit");
+    const limit = Math.max(1, Math.min(200, Number(limitRaw ?? 50) || 50));
+
+    const ns = key ? authz.extractNamespaceFromKey(key) : null;
+    if (ns) {
+      const nsCheck = authz.assertNamespace(c, ns);
+      if (!nsCheck.ok) {
+        return c.json(nsCheck.body, nsCheck.status);
+      }
+    }
+    const out = await params.forgetQueue.exportFailed({ file, key, limit });
+    await appendAuditLog(params.cfg, {
+      action: "queue_failed_export",
+      file: file?.trim() || undefined,
+      key: key?.trim() || undefined,
+      limit,
+      requester: {
+        ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? undefined,
+        userAgent: c.req.header("user-agent") ?? undefined,
+        keyId: authz.getAuth(c)?.keyId,
+      },
+    }).catch(() => {});
+    return c.json({ ok: true, ...out });
+  });
+
+  app.post("/queue/forget/failed/retry", async (c) => {
+    const rl = checkRateLimit(c, "/queue", params.cfg.RATE_LIMIT_QUEUE_ADMIN_PER_WINDOW);
+    if (!rl.ok) {
+      return c.json({ error: "rate_limited" }, 429);
+    }
+    const body = await readJsonWithLimit<Record<string, unknown>>(c, {
+      limitBytes: params.cfg.MAX_BODY_BYTES,
+      fallback: {},
+    });
+    if (typeof body === "object" && body && "error" in body) {
+      return c.json(body, body.error === "payload_too_large" ? 413 : 400);
+    }
+    const file = typeof body.file === "string" ? body.file : "";
+    const key = typeof body.key === "string" ? body.key : "";
+    const dryRun = body.dry_run === true || body.dry_run === "true";
+    const limitRaw =
+      typeof body.limit === "number"
+        ? body.limit
+        : typeof body.limit === "string"
+          ? Number(body.limit)
+          : 50;
+    const limit = Math.max(1, Math.min(200, Number(limitRaw) || 50));
+    if (file) {
+      if (dryRun) {
+        await appendAuditLog(params.cfg, {
+          action: "queue_failed_retry",
+          dryRun: true,
+          file,
+          requester: {
+            ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? undefined,
+            userAgent: c.req.header("user-agent") ?? undefined,
+            keyId: authz.getAuth(c)?.keyId,
+          },
+        }).catch(() => {});
+        return c.json({ ok: true, mode: "file", status: "dry_run" });
+      }
+      const out = await params.forgetQueue.retryFailed({ file });
+      await appendAuditLog(params.cfg, {
+        action: "queue_failed_retry",
+        dryRun: false,
+        file,
+        requester: {
+          ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? undefined,
+          userAgent: c.req.header("user-agent") ?? undefined,
+          keyId: authz.getAuth(c)?.keyId,
+        },
+      }).catch(() => {});
+      return c.json({ ok: true, mode: "file", ...out });
+    }
+    if (key) {
+      const ns = authz.extractNamespaceFromKey(key);
+      if (ns) {
+        const nsCheck = authz.assertNamespace(c, ns);
+        if (!nsCheck.ok) {
+          return c.json(nsCheck.body, nsCheck.status);
+        }
+      }
+      const out = await params.forgetQueue.retryFailedByKey({ key, limit, dryRun });
+      await appendAuditLog(params.cfg, {
+        action: "queue_failed_retry",
+        dryRun,
+        key,
+        limit,
+        retried: out.retried,
+        requester: {
+          ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? undefined,
+          userAgent: c.req.header("user-agent") ?? undefined,
+          keyId: authz.getAuth(c)?.keyId,
+        },
+      }).catch(() => {});
+      return c.json({ ok: true, mode: "key", ...out });
+    }
+    return c.json({ error: "invalid_request" }, 400);
   });
 
   app.get("/queue/failed", async (c) => {

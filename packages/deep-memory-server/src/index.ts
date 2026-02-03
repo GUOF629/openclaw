@@ -5,6 +5,7 @@ import { SessionAnalyzer } from "./analyzer.js";
 import { createApi } from "./api.js";
 import { loadConfig } from "./config.js";
 import { DurableUpdateQueue } from "./durable-update-queue.js";
+import { DurableForgetQueue } from "./durable-forget-queue.js";
 import { EmbeddingModel } from "./embeddings.js";
 import { createLogger } from "./logger.js";
 import { createMetrics } from "./metrics.js";
@@ -103,6 +104,21 @@ async function main() {
   });
   await updateQueue.init();
 
+  const forgetQueue = new DurableForgetQueue({
+    log,
+    qdrant,
+    neo4j,
+    updateQueue,
+    concurrency: 1,
+    dir: `${cfg.QUEUE_DIR.replace(/\/+$/, "")}/forget`,
+    maxAttempts: cfg.QUEUE_MAX_ATTEMPTS,
+    retryBaseMs: cfg.QUEUE_RETRY_BASE_MS,
+    retryMaxMs: cfg.QUEUE_RETRY_MAX_MS,
+    keepDone: cfg.QUEUE_KEEP_DONE,
+    retentionDays: cfg.QUEUE_RETENTION_DAYS,
+  });
+  await forgetQueue.init();
+
   // Retrieve cache (server-side): best-effort; client-side cache exists too.
   const retrieveCache = new LRUCache<string, Promise<RetrieveContextResponse>>({
     max: cfg.RETRIEVE_CACHE_MAX,
@@ -130,6 +146,7 @@ async function main() {
     qdrant,
     neo4j,
     queue: updateQueue,
+    forgetQueue,
     metrics: createMetrics(),
   });
 

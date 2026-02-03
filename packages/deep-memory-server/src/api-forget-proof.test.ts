@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DeepMemoryServerConfig } from "./config.js";
+import type { DurableForgetQueue } from "./durable-forget-queue.js";
 import type { DurableUpdateQueue } from "./durable-update-queue.js";
 import type { Neo4jStore } from "./neo4j.js";
 import type { QdrantStore } from "./qdrant.js";
@@ -44,6 +45,14 @@ function createStubApi(
       cancelBySession: async () => 1,
       ...overrides?.queue,
     } as unknown as DurableUpdateQueue,
+    forgetQueue: {
+      stats: () => ({ pendingApprox: 0, active: 0, inflightKeys: 0 }),
+      enqueue: async () => ({ status: "queued", key: "k", taskId: "t" }),
+      listFailed: async () => [],
+      exportFailed: async () => ({ mode: "empty" }),
+      retryFailed: async () => ({ status: "not_found" }),
+      retryFailedByKey: async () => ({ status: "ok", matched: 0, retried: 0 }),
+    } as unknown as DurableForgetQueue,
   });
 }
 
