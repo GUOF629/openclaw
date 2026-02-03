@@ -9,9 +9,9 @@
     "dev": "node --import tsx src/index.ts",
     "eval": "node --import tsx src/eval.ts",
     "reindex": "node --import tsx src/reindex.ts",
-    "validate-reindex": "node --import tsx src/validate-reindex.ts",
     "start": "node dist/index.js",
-    "test": "vitest run --config vitest.config.ts"
+    "test": "vitest run --config vitest.config.ts",
+    "validate-reindex": "node --import tsx src/validate-reindex.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.0",

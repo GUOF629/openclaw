@@ -1,5 +1,5 @@
-import process from "node:process";
 import fs from "node:fs/promises";
+import process from "node:process";
 import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { Neo4jStore } from "./neo4j.js";
@@ -18,7 +18,9 @@ function parseArgs(argv: string[]): Args {
   const out: Args = { allNamespaces: false, sampleSize: 50 };
   for (let i = 0; i < argv.length; i += 1) {
     const t = argv[i]?.trim();
-    if (!t) continue;
+    if (!t) {
+      continue;
+    }
     if (t === "--namespace" || t === "-n") {
       out.namespace = argv[i + 1]?.trim();
       i += 1;
@@ -43,7 +45,9 @@ function parseArgs(argv: string[]): Args {
     }
     if (t === "--out") {
       const v = argv[i + 1]?.trim();
-      if (v) out.outFile = v;
+      if (v) {
+        out.outFile = v;
+      }
       i += 1;
       continue;
     }
@@ -99,9 +103,15 @@ async function main() {
   const cfg = loadConfig();
   const log = createLogger(cfg.LOG_LEVEL);
   const targetCollection = (args.targetCollection ?? cfg.QDRANT_COLLECTION).trim();
-  if (!targetCollection) throw new Error("empty target collection");
+  if (!targetCollection) {
+    throw new Error("empty target collection");
+  }
 
-  const neo4j = new Neo4jStore({ uri: cfg.NEO4J_URI, user: cfg.NEO4J_USER, password: cfg.NEO4J_PASSWORD });
+  const neo4j = new Neo4jStore({
+    uri: cfg.NEO4J_URI,
+    user: cfg.NEO4J_USER,
+    password: cfg.NEO4J_PASSWORD,
+  });
   const qdrant = new QdrantStore({
     url: cfg.QDRANT_URL,
     apiKey: cfg.QDRANT_API_KEY,
@@ -136,11 +146,17 @@ async function main() {
       let afterId: string | undefined;
       while (true) {
         const page = await neo4j.scanMemories({ namespace: ns, afterId, limit: 200 });
-        if (page.length === 0) break;
+        if (page.length === 0) {
+          break;
+        }
         for (const m of page) {
           afterId = m.id;
           const h = hashToNumber(stableHash(m.id));
-          maybeAddSample(samples, { id: m.id, content: m.content, namespace: ns, hash: h }, args.sampleSize);
+          maybeAddSample(
+            samples,
+            { id: m.id, content: m.content, namespace: ns, hash: h },
+            args.sampleSize,
+          );
         }
       }
 
@@ -174,7 +190,13 @@ async function main() {
         missingIds: missingIds.slice(0, 50),
       });
       log.info(
-        { namespace: ns, neo4jCount, qdrantCount, sample: samples.length, missing: missingIds.length },
+        {
+          namespace: ns,
+          neo4jCount,
+          qdrantCount,
+          sample: samples.length,
+          missing: missingIds.length,
+        },
         "validate-reindex namespace summary",
       );
     }
@@ -196,4 +218,3 @@ void main().catch((err) => {
   console.error(String(err instanceof Error ? (err.stack ?? err.message) : err));
   process.exit(1);
 });
-
