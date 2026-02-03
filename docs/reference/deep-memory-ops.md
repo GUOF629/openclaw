@@ -168,6 +168,7 @@ docker compose --profile deep-memory-prod up -d deep-memory-server-prod
 - `GET /health/details` shows schema checks are ok (and no migration warnings)
 - `GET /metrics` (authorized admin key)
 - normal OpenClaw operation (retrieval + update)
+- (recommended) run offline eval regression: `pnpm --dir packages/deep-memory-server eval`
 
 ### Schema migrations (Neo4j/Qdrant)
 
