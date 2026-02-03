@@ -11,6 +11,7 @@ import { createMetrics } from "./metrics.js";
 import { Neo4jStore } from "./neo4j.js";
 import { QdrantStore } from "./qdrant.js";
 import { DeepMemoryRetriever } from "./retriever.js";
+import { DEEPMEM_SCHEMA_VERSION } from "./schema.js";
 import { DeepMemoryUpdater } from "./updater.js";
 
 async function main() {
@@ -32,14 +33,34 @@ async function main() {
 
   // Init (best-effort): if either backend is down, server still starts and will degrade.
   try {
-    await qdrant.ensureCollection();
-    log.info({ collection: cfg.QDRANT_COLLECTION }, "qdrant collection ready");
+    const status = await qdrant.schemaStatus({
+      mode: cfg.MIGRATIONS_MODE,
+      expectedVersion: DEEPMEM_SCHEMA_VERSION,
+    });
+    if (!status.ok) {
+      log.warn({ status }, "qdrant schema not ready");
+      if (cfg.MIGRATIONS_STRICT) {
+        throw new Error("qdrant schema not ready (strict)");
+      }
+    } else {
+      log.info({ status }, "qdrant schema ready");
+    }
   } catch (err) {
     log.warn({ err: String(err) }, "qdrant unavailable at startup (will degrade)");
   }
   try {
-    await neo4j.ensureSchema();
-    log.info("neo4j schema ready");
+    const status = await neo4j.schemaStatus({
+      mode: cfg.MIGRATIONS_MODE,
+      expectedVersion: DEEPMEM_SCHEMA_VERSION,
+    });
+    if (!status.ok) {
+      log.warn({ status }, "neo4j schema not ready");
+      if (cfg.MIGRATIONS_STRICT) {
+        throw new Error("neo4j schema not ready (strict)");
+      }
+    } else {
+      log.info({ status }, "neo4j schema ready");
+    }
   } catch (err) {
     log.warn({ err: String(err) }, "neo4j unavailable at startup (will degrade)");
   }

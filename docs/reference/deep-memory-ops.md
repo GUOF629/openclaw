@@ -24,6 +24,7 @@ It assumes you are using the repo root `docker-compose.yml` profiles:
 From the host running the services:
 
 - `GET http://127.0.0.1:8088/health` (liveness + queue stats)
+- `GET http://127.0.0.1:8088/health/details` (detailed health + schema checks; admin-only when API keys are required)
 - `GET http://127.0.0.1:8088/readyz` (readiness; returns 503 if Qdrant/Neo4j are unavailable)
 
 If you scrape metrics (recommended):
@@ -164,8 +165,25 @@ docker compose --profile deep-memory-prod up -d deep-memory-server-prod
 5. Verify:
 
 - `GET /readyz` (200)
+- `GET /health/details` shows schema checks are ok (and no migration warnings)
 - `GET /metrics` (authorized admin key)
 - normal OpenClaw operation (retrieval + update)
+
+### Schema migrations (Neo4j/Qdrant)
+
+deep-memory-server performs **startup schema checks** for Neo4j constraints/indexes and Qdrant collection schema.
+
+Key env vars:
+
+- `MIGRATIONS_MODE=apply|validate|off` (default `apply`)
+  - `apply`: create missing safe objects (constraints/indexes/collection) but never drops data
+  - `validate`: check and report missing/mismatched schema, but do not modify the DB
+  - `off`: skip schema checks (not recommended)
+- `MIGRATIONS_STRICT=true|false` (default `false`)
+  - If `true`, the server fails startup when schema checks fail (recommended for strict production)
+
+**Qdrant dims changes:** if you change `VECTOR_DIMS`, the existing collection cannot be resized in-place.
+Recommended migration is to create a new collection (new name), run a reindex job, then switch `QDRANT_COLLECTION`.
 
 ## Key rotation (API_KEYS_JSON)
 

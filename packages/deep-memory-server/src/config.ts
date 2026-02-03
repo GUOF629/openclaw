@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { MigrationMode } from "./schema.js";
 
 const EnvSchema = z.object({
   PORT: z.coerce.number().int().positive().default(8088),
@@ -27,6 +28,10 @@ const EnvSchema = z.object({
   RATE_LIMIT_QUEUE_ADMIN_PER_WINDOW: z.coerce.number().int().nonnegative().default(0),
   UPDATE_BACKLOG_REJECT_PENDING: z.coerce.number().int().nonnegative().default(0),
   UPDATE_BACKLOG_RETRY_AFTER_SECONDS: z.coerce.number().int().positive().default(30),
+  MIGRATIONS_MODE: z
+    .enum(["off", "validate", "apply"])
+    .default("apply") satisfies z.ZodType<MigrationMode>,
+  MIGRATIONS_STRICT: z.coerce.boolean().default(false),
 
   // Qdrant
   QDRANT_URL: z.string().default("http://qdrant:6333"),

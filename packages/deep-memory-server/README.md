@@ -53,6 +53,8 @@ Notable knobs:
 - `IMPORTANCE_BOOST` / `FREQUENCY_BOOST`: ranking boosts to model “memory growth”
 - `RELATED_TOPK`: build `RELATED_TO` graph edges by linking each new memory to its nearest neighbors
 - `SENSITIVE_FILTER_ENABLED`: drop likely-secret text (tokens/passwords/keys) before storage
+- `MIGRATIONS_MODE`: schema migration behavior (`off` | `validate` | `apply`); default `apply`
+- `MIGRATIONS_STRICT`: if `true`, fail startup when schema checks fail (recommended for strict production)
 
 ## Production notes
 

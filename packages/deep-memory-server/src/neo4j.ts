@@ -1,4 +1,5 @@
 import neo4j, { type Driver } from "neo4j-driver";
+import type { SchemaCheckResult } from "./schema.js";
 import type { CandidateMemory, ExtractedEntity, ExtractedEvent, ExtractedTopic } from "./types.js";
 
 export class Neo4jStore {
@@ -24,28 +25,231 @@ export class Neo4jStore {
     }
   }
 
-  async ensureSchema(): Promise<void> {
+  private async listConstraints(): Promise<
+    Array<{
+      name: string;
+      type: string;
+      labelsOrTypes: string[];
+      properties: string[];
+    }>
+  > {
     const session = this.driver.session();
     try {
-      // Constraints for fast upserts.
-      await session.run(
-        `CREATE CONSTRAINT deepmem_session_id IF NOT EXISTS FOR (s:Session) REQUIRE s.id IS UNIQUE`,
+      const res = await session.run(
+        "SHOW CONSTRAINTS YIELD name, type, labelsOrTypes, properties RETURN name, type, labelsOrTypes, properties",
       );
-      await session.run(
-        `CREATE CONSTRAINT deepmem_memory_id IF NOT EXISTS FOR (m:Memory) REQUIRE m.id IS UNIQUE`,
+      return res.records.map((r) => {
+        const labels = r.get("labelsOrTypes") as unknown;
+        const props = r.get("properties") as unknown;
+        return {
+          name: String(r.get("name") ?? ""),
+          type: String(r.get("type") ?? ""),
+          labelsOrTypes: Array.isArray(labels) ? labels.map((x) => String(x)) : [],
+          properties: Array.isArray(props) ? props.map((x) => String(x)) : [],
+        };
+      });
+    } finally {
+      await session.close();
+    }
+  }
+
+  private async listIndexes(): Promise<
+    Array<{
+      name: string;
+      type: string;
+      labelsOrTypes: string[];
+      properties: string[];
+    }>
+  > {
+    const session = this.driver.session();
+    try {
+      const res = await session.run(
+        "SHOW INDEXES YIELD name, type, labelsOrTypes, properties RETURN name, type, labelsOrTypes, properties",
       );
-      await session.run(
-        `CREATE CONSTRAINT deepmem_topic_id IF NOT EXISTS FOR (t:Topic) REQUIRE t.id IS UNIQUE`,
+      return res.records.map((r) => {
+        const labels = r.get("labelsOrTypes") as unknown;
+        const props = r.get("properties") as unknown;
+        return {
+          name: String(r.get("name") ?? ""),
+          type: String(r.get("type") ?? ""),
+          labelsOrTypes: Array.isArray(labels) ? labels.map((x) => String(x)) : [],
+          properties: Array.isArray(props) ? props.map((x) => String(x)) : [],
+        };
+      });
+    } finally {
+      await session.close();
+    }
+  }
+
+  private hasUniquenessConstraint(
+    constraints: Awaited<ReturnType<Neo4jStore["listConstraints"]>>,
+    label: string,
+    property: string,
+  ): boolean {
+    return constraints.some((c) => {
+      const t = c.type.toUpperCase();
+      return (
+        t.includes("UNIQUENESS") &&
+        c.labelsOrTypes.includes(label) &&
+        c.properties.length === 1 &&
+        c.properties[0] === property
       );
-      await session.run(
-        `CREATE CONSTRAINT deepmem_entity_id IF NOT EXISTS FOR (e:Entity) REQUIRE e.id IS UNIQUE`,
+    });
+  }
+
+  private hasBtreeIndex(
+    indexes: Awaited<ReturnType<Neo4jStore["listIndexes"]>>,
+    label: string,
+    property: string,
+  ): boolean {
+    return indexes.some((idx) => {
+      const t = idx.type.toUpperCase();
+      return (
+        (t.includes("BTREE") || t.includes("RANGE") || t.includes("TEXT")) &&
+        idx.labelsOrTypes.includes(label) &&
+        idx.properties.length === 1 &&
+        idx.properties[0] === property
       );
+    });
+  }
+
+  private async getSchemaVersion(): Promise<number | undefined> {
+    const session = this.driver.session();
+    try {
+      const res = await session.run(
+        "MATCH (m:DeepMemMeta {id: 'schema'}) RETURN m.schema_version AS v LIMIT 1",
+      );
+      const row = res.records[0];
+      if (!row) {
+        return undefined;
+      }
+      const v = row.get("v") as unknown;
+      return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+    } finally {
+      await session.close();
+    }
+  }
+
+  private async setSchemaVersion(v: number): Promise<void> {
+    const session = this.driver.session();
+    try {
       await session.run(
-        `CREATE CONSTRAINT deepmem_event_id IF NOT EXISTS FOR (e:Event) REQUIRE e.id IS UNIQUE`,
+        "MERGE (m:DeepMemMeta {id: 'schema'}) SET m.schema_version = $v, m.updated_at = datetime()",
+        { v },
       );
     } finally {
       await session.close();
     }
+  }
+
+  private async runSchemaStatement(cypher: string): Promise<void> {
+    const session = this.driver.session();
+    try {
+      await session.run(cypher);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Neo4j will error if an equivalent constraint exists under another name.
+      if (msg.toLowerCase().includes("already exists")) {
+        return;
+      }
+      throw err;
+    } finally {
+      await session.close();
+    }
+  }
+
+  async schemaStatus(params: {
+    mode: SchemaCheckResult["mode"];
+    expectedVersion: number;
+  }): Promise<SchemaCheckResult> {
+    const actions: string[] = [];
+    const warnings: string[] = [];
+    try {
+      const currentVersion = await this.getSchemaVersion();
+      if (params.mode === "off") {
+        return {
+          ok: true,
+          mode: params.mode,
+          expectedVersion: params.expectedVersion,
+          currentVersion,
+        };
+      }
+
+      const constraints = await this.listConstraints();
+      const indexes = await this.listIndexes();
+
+      const requiredUnique: Array<{ label: string; property: string; name: string }> = [
+        { label: "Session", property: "id", name: "deepmem_session_id" },
+        { label: "Memory", property: "id", name: "deepmem_memory_id" },
+        { label: "Topic", property: "id", name: "deepmem_topic_id" },
+        { label: "Entity", property: "id", name: "deepmem_entity_id" },
+        { label: "Event", property: "id", name: "deepmem_event_id" },
+      ];
+
+      const requiredIndexes: Array<{ label: string; property: string; name: string }> = [
+        { label: "Entity", property: "name", name: "deepmem_entity_name" },
+        { label: "Topic", property: "name", name: "deepmem_topic_name" },
+        { label: "Memory", property: "memory_key", name: "deepmem_memory_key" },
+      ];
+
+      const missingUniques = requiredUnique.filter(
+        (r) => !this.hasUniquenessConstraint(constraints, r.label, r.property),
+      );
+      const missingIndexes = requiredIndexes.filter(
+        (r) => !this.hasBtreeIndex(indexes, r.label, r.property),
+      );
+
+      if (params.mode === "apply") {
+        for (const c of missingUniques) {
+          await this.runSchemaStatement(
+            `CREATE CONSTRAINT ${c.name} IF NOT EXISTS FOR (n:${c.label}) REQUIRE n.${c.property} IS UNIQUE`,
+          );
+          actions.push(`created constraint ${c.name}`);
+        }
+        for (const idx of missingIndexes) {
+          await this.runSchemaStatement(
+            `CREATE INDEX ${idx.name} IF NOT EXISTS FOR (n:${idx.label}) ON (n.${idx.property})`,
+          );
+          actions.push(`created index ${idx.name}`);
+        }
+        await this.setSchemaVersion(params.expectedVersion);
+      } else {
+        for (const c of missingUniques) {
+          warnings.push(`missing uniqueness constraint on :${c.label}(${c.property})`);
+        }
+        for (const idx of missingIndexes) {
+          warnings.push(`missing index on :${idx.label}(${idx.property})`);
+        }
+      }
+
+      const ok =
+        missingUniques.length === 0 &&
+        missingIndexes.length === 0 &&
+        (currentVersion == null || currentVersion <= params.expectedVersion);
+
+      return {
+        ok: params.mode === "apply" ? true : ok,
+        mode: params.mode,
+        expectedVersion: params.expectedVersion,
+        currentVersion,
+        actions: actions.length ? actions : undefined,
+        warnings: warnings.length ? warnings : undefined,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        mode: params.mode,
+        expectedVersion: params.expectedVersion,
+        error: err instanceof Error ? err.message : String(err),
+        actions: actions.length ? actions : undefined,
+        warnings: warnings.length ? warnings : undefined,
+      };
+    }
+  }
+
+  async ensureSchema(): Promise<void> {
+    // Back-compat: keep behavior (create missing constraints/indexes).
+    await this.schemaStatus({ mode: "apply", expectedVersion: 0 });
   }
 
   private prefix(namespace: string): string {

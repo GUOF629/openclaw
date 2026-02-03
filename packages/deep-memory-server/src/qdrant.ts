@@ -1,4 +1,5 @@
 import { QdrantClient } from "@qdrant/js-client-rest";
+import type { SchemaCheckResult } from "./schema.js";
 
 export type QdrantMemoryPayload = {
   id: string;
@@ -34,15 +35,86 @@ export class QdrantStore {
     this.dims = params.dims;
   }
 
-  async ensureCollection(): Promise<void> {
-    const existing = await this.client.getCollections();
-    const has = existing.collections.some((c) => c.name === this.collection);
-    if (has) {
-      return;
+  async schemaStatus(params: {
+    mode: SchemaCheckResult["mode"];
+    expectedVersion: number;
+  }): Promise<SchemaCheckResult> {
+    const actions: string[] = [];
+    const warnings: string[] = [];
+    try {
+      const existing = await this.client.getCollections();
+      const has = existing.collections.some((c) => c.name === this.collection);
+      if (!has) {
+        if (params.mode === "apply") {
+          await this.client.createCollection(this.collection, {
+            vectors: { size: this.dims, distance: "Cosine" },
+          });
+          actions.push(`created collection ${this.collection}`);
+          return {
+            ok: true,
+            mode: params.mode,
+            expectedVersion: params.expectedVersion,
+            actions,
+            warnings,
+          };
+        }
+        warnings.push(`missing collection ${this.collection}`);
+        return {
+          ok: false,
+          mode: params.mode,
+          expectedVersion: params.expectedVersion,
+          actions,
+          warnings,
+        };
+      }
+
+      // Validate collection vector size matches configured dims.
+      const info = await this.client.getCollection(this.collection);
+      const vectors = (info as unknown as { config?: { params?: { vectors?: unknown } } }).config
+        ?.params?.vectors;
+      const size =
+        typeof vectors === "object" && vectors && "size" in vectors
+          ? (vectors as Record<string, unknown>).size
+          : undefined;
+      const actualDims = typeof size === "number" ? size : undefined;
+      if (actualDims != null && actualDims !== this.dims) {
+        warnings.push(
+          `collection dims mismatch: expected=${this.dims} actual=${actualDims} (${this.collection})`,
+        );
+        warnings.push(
+          "migration required: create a new collection with the new dims and reindex memories",
+        );
+        return {
+          ok: false,
+          mode: params.mode,
+          expectedVersion: params.expectedVersion,
+          actions,
+          warnings,
+        };
+      }
+
+      return {
+        ok: true,
+        mode: params.mode,
+        expectedVersion: params.expectedVersion,
+        actions,
+        warnings,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        mode: params.mode,
+        expectedVersion: params.expectedVersion,
+        actions,
+        warnings,
+        error: err instanceof Error ? err.message : String(err),
+      };
     }
-    await this.client.createCollection(this.collection, {
-      vectors: { size: this.dims, distance: "Cosine" },
-    });
+  }
+
+  async ensureCollection(): Promise<void> {
+    // Back-compat: keep behavior (create if missing).
+    await this.schemaStatus({ mode: "apply", expectedVersion: 0 });
   }
 
   async healthCheck(): Promise<{ ok: true } | { ok: false; error: string }> {

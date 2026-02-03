@@ -16,6 +16,7 @@ import { appendAuditLog } from "./audit-log.js";
 import { createAuthz } from "./authz.js";
 import { enforceBodySize, readJsonWithLimit } from "./body-limit.js";
 import { FixedWindowRateLimiter } from "./rate-limit.js";
+import { DEEPMEM_SCHEMA_VERSION } from "./schema.js";
 
 type PackageJson = { version?: unknown; name?: unknown };
 
@@ -278,6 +279,12 @@ export function createApi(params: {
           retryAfterSeconds: params.cfg.UPDATE_BACKLOG_RETRY_AFTER_SECONDS,
         },
       },
+      schema: details
+        ? {
+            expectedVersion: DEEPMEM_SCHEMA_VERSION,
+            mode: params.cfg.MIGRATIONS_MODE,
+          }
+        : undefined,
       now: new Date().toISOString(),
     };
   };
@@ -288,7 +295,30 @@ export function createApi(params: {
   if (authz.required) {
     app.use("/health/details", authz.requireRole("admin"));
   }
-  app.get("/health/details", (c) => c.json(buildHealthBody(true)));
+  app.get("/health/details", async (c) => {
+    const timeoutMs = 1500;
+    const qdrant = await withTimeout("qdrant_schema", timeoutMs, async () =>
+      params.qdrant.schemaStatus({
+        mode: params.cfg.MIGRATIONS_MODE,
+        expectedVersion: DEEPMEM_SCHEMA_VERSION,
+      }),
+    );
+    const neo4j = await withTimeout("neo4j_schema", timeoutMs, async () =>
+      params.neo4j.schemaStatus({
+        mode: params.cfg.MIGRATIONS_MODE,
+        expectedVersion: DEEPMEM_SCHEMA_VERSION,
+      }),
+    );
+    return c.json({
+      ...buildHealthBody(true),
+      schema: {
+        expectedVersion: DEEPMEM_SCHEMA_VERSION,
+        mode: params.cfg.MIGRATIONS_MODE,
+        qdrant: qdrant.ok ? qdrant.value : { ok: false, error: qdrant.error },
+        neo4j: neo4j.ok ? neo4j.value : { ok: false, error: neo4j.error },
+      },
+    });
+  });
 
   // Readiness probe: verifies dependencies are reachable within a tight timeout.
   app.get("/readyz", async (c) => {
