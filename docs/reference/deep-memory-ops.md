@@ -270,3 +270,25 @@ Safe rotation sequence:
 2. Deploy deep-memory-server with updated `API_KEYS_JSON`
 3. Update OpenClaw config to use new keys
 4. Remove old keys and redeploy
+
+## Data lifecycle (expired memories)
+
+If you store memories with `expires_at`, you should periodically garbage-collect expired items so they do not linger in Qdrant/Neo4j.
+
+Run an offline GC (recommended during low-traffic windows):
+
+```bash
+# Dry-run first
+pnpm --dir packages/deep-memory-server gc-expired -- --namespace teamA --dry-run
+
+# Then delete expired memories (both Qdrant + Neo4j)
+pnpm --dir packages/deep-memory-server gc-expired -- \
+  --namespace teamA \
+  --delete-batch 200 \
+  --out gc-expired.teamA.json
+```
+
+Notes:
+
+- Prefer running on a staging restore first if you have not done this before.
+- Keep backups before large destructive maintenance.
