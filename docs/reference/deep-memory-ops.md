@@ -188,6 +188,19 @@ docker compose --profile deep-memory-prod up -d deep-memory-server-prod
 - normal OpenClaw operation (retrieval + update)
 - (recommended) run offline eval regression: `pnpm --dir packages/deep-memory-server eval`
 
+### Release checklist (deep-memory-server)
+
+Before shipping a deep-memory-server build to production:
+
+- Confirm backups exist (Neo4j/Qdrant/deepmem_data)
+- Run `pnpm -w check` and `pnpm -w test -F deep-memory-server`
+- Run `pnpm --dir packages/deep-memory-server eval` (and compare vs baseline if you keep snapshots)
+- Verify `GET /readyz` is 200 on the target environment
+- Verify `GET /health/details` as admin:
+  - schema checks ok
+  - guardrails settings are as expected (rate limits, backlog, namespace limits, sensitive filter)
+- If you set build metadata, verify `/health` includes `build.sha` and `build.time`
+
 ### Schema migrations (Neo4j/Qdrant)
 
 deep-memory-server performs **startup schema checks** for Neo4j constraints/indexes and Qdrant collection schema.

@@ -253,6 +253,10 @@ export function createApi(params: {
         arch: process.arch,
         uptimeSec: Math.max(0, Math.floor(process.uptime())),
       },
+      build: {
+        sha: params.cfg.BUILD_SHA?.trim() || undefined,
+        time: params.cfg.BUILD_TIME?.trim() || undefined,
+      },
       auth: {
         required: authz.required,
       },

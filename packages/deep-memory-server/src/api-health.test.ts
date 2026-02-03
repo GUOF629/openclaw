@@ -43,6 +43,8 @@ describe("/health", () => {
     API_KEY: undefined,
     API_KEYS: undefined,
     API_KEYS_JSON: JSON.stringify([{ key: "adminKey", role: "admin", namespaces: ["default"] }]),
+    BUILD_SHA: undefined,
+    BUILD_TIME: undefined,
     REQUIRE_API_KEY: true,
     MAX_BODY_BYTES: 1024,
     MAX_UPDATE_BODY_BYTES: 1024,

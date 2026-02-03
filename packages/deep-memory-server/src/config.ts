@@ -7,6 +7,8 @@ const EnvSchema = z.object({
   API_KEY: z.string().optional(),
   API_KEYS: z.string().optional(),
   API_KEYS_JSON: z.string().optional(),
+  BUILD_SHA: z.string().optional(),
+  BUILD_TIME: z.string().optional(),
   REQUIRE_API_KEY: z.coerce.boolean().default(false),
   MAX_BODY_BYTES: z.coerce
     .number()

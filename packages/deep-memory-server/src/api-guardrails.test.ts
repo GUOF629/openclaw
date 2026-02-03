@@ -50,6 +50,8 @@ describe("API guardrails", () => {
   const cfgBase: DeepMemoryServerConfig = {
     PORT: 0,
     HOST: "0.0.0.0",
+    BUILD_SHA: undefined,
+    BUILD_TIME: undefined,
     REQUIRE_API_KEY: true,
     API_KEYS_JSON: JSON.stringify([{ key: "readKey", role: "read", namespaces: ["ns1"] }]),
     MAX_BODY_BYTES: 1024,
