@@ -64,6 +64,9 @@ describe("API guardrails", () => {
     RATE_LIMIT_QUEUE_ADMIN_PER_WINDOW: 0,
     UPDATE_BACKLOG_REJECT_PENDING: 0,
     UPDATE_BACKLOG_RETRY_AFTER_SECONDS: 30,
+    UPDATE_DISABLED_NAMESPACES: undefined,
+    UPDATE_MIN_INTERVAL_MS: 0,
+    UPDATE_SAMPLE_RATE: 1,
     QDRANT_URL: "http://qdrant:6333",
     QDRANT_API_KEY: undefined,
     QDRANT_COLLECTION: "openclaw_memories",
@@ -96,6 +99,8 @@ describe("API guardrails", () => {
     EMBEDDING_MODEL: "Xenova/bge-small-en-v1.5",
     API_KEY: undefined,
     API_KEYS: undefined,
+    MIGRATIONS_MODE: "off",
+    MIGRATIONS_STRICT: false,
   };
 
   it("rate limits /retrieve_context", async () => {
@@ -137,5 +142,25 @@ describe("API guardrails", () => {
     expect(r.status).toBe(503);
     expect(enqueue).not.toHaveBeenCalled();
     expect(r.headers.get("retry-after")).toBe("7");
+  });
+
+  it("skips updates for disabled namespaces", async () => {
+    const cfg = {
+      ...cfgBase,
+      API_KEYS_JSON: JSON.stringify([{ key: "writeKey", role: "write", namespaces: ["ns1"] }]),
+      RATE_LIMIT_UPDATE_PER_WINDOW: 0,
+      UPDATE_DISABLED_NAMESPACES: "ns1",
+    } as DeepMemoryServerConfig;
+    const { app, enqueue } = createStubApi(cfg);
+    const r = await app.request("/update_memory_index", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": "writeKey" },
+      body: JSON.stringify({ namespace: "ns1", session_id: "s1", messages: [], async: true }),
+    });
+    expect(r.status).toBe(200);
+    expect(enqueue).not.toHaveBeenCalled();
+    const json = (await r.json()) as Record<string, unknown>;
+    expect(json.status).toBe("skipped");
+    expect(json.error).toBe("namespace_write_disabled");
   });
 });

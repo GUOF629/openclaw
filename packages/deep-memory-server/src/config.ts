@@ -28,6 +28,9 @@ const EnvSchema = z.object({
   RATE_LIMIT_QUEUE_ADMIN_PER_WINDOW: z.coerce.number().int().nonnegative().default(0),
   UPDATE_BACKLOG_REJECT_PENDING: z.coerce.number().int().nonnegative().default(0),
   UPDATE_BACKLOG_RETRY_AFTER_SECONDS: z.coerce.number().int().positive().default(30),
+  UPDATE_DISABLED_NAMESPACES: z.string().optional(),
+  UPDATE_MIN_INTERVAL_MS: z.coerce.number().int().nonnegative().default(0),
+  UPDATE_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(1),
   MIGRATIONS_MODE: z
     .enum(["off", "validate", "apply"])
     .default("apply") satisfies z.ZodType<MigrationMode>,

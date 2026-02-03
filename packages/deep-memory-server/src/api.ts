@@ -18,6 +18,7 @@ import { createAuthz } from "./authz.js";
 import { enforceBodySize, readJsonWithLimit } from "./body-limit.js";
 import { FixedWindowRateLimiter } from "./rate-limit.js";
 import { DEEPMEM_SCHEMA_VERSION } from "./schema.js";
+import { stableHash } from "./utils.js";
 
 type PackageJson = { version?: unknown; name?: unknown };
 
@@ -100,6 +101,13 @@ export function createApi(params: {
   const app = new Hono();
   const authz = createAuthz(params.cfg);
   const limiter = new FixedWindowRateLimiter({ windowMs: params.cfg.RATE_LIMIT_WINDOW_MS });
+  const lastUpdateAtByKey = new Map<string, number>();
+  const updateDisabledNamespaces = new Set(
+    (params.cfg.UPDATE_DISABLED_NAMESPACES ?? "")
+      .split(/[,\s]+/g)
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
   const serviceVersion = getServiceVersion();
   const build = getBuildInfo();
 
@@ -281,6 +289,11 @@ export function createApi(params: {
           rejectPending: params.cfg.UPDATE_BACKLOG_REJECT_PENDING,
           retryAfterSeconds: params.cfg.UPDATE_BACKLOG_RETRY_AFTER_SECONDS,
         },
+        updateIngest: {
+          disabledNamespaces: Array.from(updateDisabledNamespaces.values()),
+          minIntervalMs: params.cfg.UPDATE_MIN_INTERVAL_MS,
+          sampleRate: params.cfg.UPDATE_SAMPLE_RATE,
+        },
       },
       schema: details
         ? {
@@ -404,6 +417,49 @@ export function createApi(params: {
     const nsCheck = authz.assertNamespace(c, namespace);
     if (!nsCheck.ok) {
       return c.json(nsCheck.body, nsCheck.status);
+    }
+
+    if (updateDisabledNamespaces.has(namespace)) {
+      return c.json({
+        status: "skipped",
+        memories_added: 0,
+        memories_filtered: 0,
+        error: "namespace_write_disabled",
+      });
+    }
+
+    const sampleRate = params.cfg.UPDATE_SAMPLE_RATE;
+    if (sampleRate < 1) {
+      const msgCount = Array.isArray(req.messages) ? req.messages.length : 0;
+      const h = stableHash(`${namespace}::${req.session_id}::${msgCount}`);
+      const bucket = Number.parseInt(h.slice(0, 8), 16);
+      const p = (bucket % 10_000) / 10_000;
+      if (p >= sampleRate) {
+        return c.json({
+          status: "skipped",
+          memories_added: 0,
+          memories_filtered: 0,
+          error: "sampled_out",
+        });
+      }
+    }
+
+    const minIntervalMs = params.cfg.UPDATE_MIN_INTERVAL_MS;
+    if (minIntervalMs > 0) {
+      const key = `${namespace}::${req.session_id}`;
+      const last = lastUpdateAtByKey.get(key) ?? 0;
+      const now = Date.now();
+      const waitMs = last > 0 ? minIntervalMs - (now - last) : 0;
+      if (waitMs > 0) {
+        c.header("retry-after", String(Math.max(1, Math.ceil(waitMs / 1000))));
+        return c.json({
+          status: "skipped",
+          memories_added: 0,
+          memories_filtered: 0,
+          error: "throttled",
+        });
+      }
+      lastUpdateAtByKey.set(key, now);
     }
     const runAsync = req.async ?? true;
 
