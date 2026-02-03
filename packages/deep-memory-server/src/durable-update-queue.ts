@@ -110,6 +110,7 @@ export class DurableUpdateQueue {
   private readonly log: Logger;
   private readonly updater: DeepMemoryUpdater;
   private readonly concurrency: number;
+  private readonly namespaceConcurrency: number;
   private readonly baseDir: string;
   private readonly pendingDir: string;
   private readonly inflightDir: string;
@@ -125,6 +126,7 @@ export class DurableUpdateQueue {
   private active = 0;
   private stopped = false;
   private readonly inflightKeys = new Set<string>();
+  private readonly inflightNamespaces = new Map<string, number>();
   private readonly pendingFilesByKey = new Map<string, string>(); // best-effort "latest"
 
   private idleWaiters: Array<() => void> = [];
@@ -133,6 +135,7 @@ export class DurableUpdateQueue {
     log: Logger;
     updater: DeepMemoryUpdater;
     concurrency: number;
+    namespaceConcurrency?: number;
     dir: string;
     maxAttempts: number;
     retryBaseMs: number;
@@ -144,6 +147,7 @@ export class DurableUpdateQueue {
     this.log = params.log;
     this.updater = params.updater;
     this.concurrency = Math.max(1, params.concurrency);
+    this.namespaceConcurrency = Math.max(0, params.namespaceConcurrency ?? 0);
     this.baseDir = params.dir;
     this.pendingDir = path.join(this.baseDir, "pending");
     this.inflightDir = path.join(this.baseDir, "inflight");
@@ -572,6 +576,12 @@ export class DurableUpdateQueue {
         if ((task.nextRunAt ?? 0) > now) {
           continue;
         }
+        if (this.namespaceConcurrency > 0) {
+          const activeNs = this.inflightNamespaces.get(task.namespace) ?? 0;
+          if (activeNs >= this.namespaceConcurrency) {
+            continue;
+          }
+        }
         // Move to inflight atomically by rename to avoid duplicates across crashes.
         const inflightPath = path.join(this.inflightDir, path.basename(filePath));
         await fs.rename(filePath, inflightPath);
@@ -589,6 +599,7 @@ export class DurableUpdateQueue {
   private async runTask(params: { filePath: string; task: PersistedUpdateTask }): Promise<void> {
     const task = params.task;
     const key = task.key;
+    const ns = task.namespace;
     if (this.inflightKeys.has(key)) {
       // Another runner took it (shouldn't happen). Put back.
       await fs.rename(params.filePath, path.join(this.pendingDir, path.basename(params.filePath)));
@@ -596,6 +607,9 @@ export class DurableUpdateQueue {
       return;
     }
     this.inflightKeys.add(key);
+    if (this.namespaceConcurrency > 0) {
+      this.inflightNamespaces.set(ns, (this.inflightNamespaces.get(ns) ?? 0) + 1);
+    }
     try {
       const attempt = Math.max(1, (task.attempt ?? 0) + 1);
       task.attempt = attempt;
@@ -642,6 +656,14 @@ export class DurableUpdateQueue {
       this.log.warn({ key, attempt, delay, lastError }, "task retry scheduled");
     } finally {
       this.inflightKeys.delete(key);
+      if (this.namespaceConcurrency > 0) {
+        const next = (this.inflightNamespaces.get(ns) ?? 1) - 1;
+        if (next <= 0) {
+          this.inflightNamespaces.delete(ns);
+        } else {
+          this.inflightNamespaces.set(ns, next);
+        }
+      }
     }
   }
 }

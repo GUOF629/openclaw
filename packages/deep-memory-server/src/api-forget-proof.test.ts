@@ -76,6 +76,11 @@ describe("/forget proof-ish response", () => {
     RATE_LIMIT_QUEUE_ADMIN_PER_WINDOW: 0,
     UPDATE_BACKLOG_REJECT_PENDING: 0,
     UPDATE_BACKLOG_RETRY_AFTER_SECONDS: 30,
+    UPDATE_DISABLED_NAMESPACES: undefined,
+    UPDATE_MIN_INTERVAL_MS: 0,
+    UPDATE_SAMPLE_RATE: 1,
+    NAMESPACE_RETRIEVE_CONCURRENCY: 0,
+    NAMESPACE_UPDATE_CONCURRENCY: 0,
     MIGRATIONS_MODE: "off",
     MIGRATIONS_STRICT: false,
     QDRANT_URL: "http://qdrant:6333",
@@ -107,6 +112,9 @@ describe("/forget proof-ish response", () => {
     FREQUENCY_BOOST: 0.2,
     RELATED_TOPK: 5,
     SENSITIVE_FILTER_ENABLED: true,
+    SENSITIVE_RULESET_VERSION: "builtin-v1",
+    SENSITIVE_DENY_REGEX_JSON: undefined,
+    SENSITIVE_ALLOW_REGEX_JSON: undefined,
     EMBEDDING_MODEL: "Xenova/bge-small-en-v1.5",
   };
 

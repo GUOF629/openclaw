@@ -31,6 +31,8 @@ const EnvSchema = z.object({
   UPDATE_DISABLED_NAMESPACES: z.string().optional(),
   UPDATE_MIN_INTERVAL_MS: z.coerce.number().int().nonnegative().default(0),
   UPDATE_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(1),
+  NAMESPACE_RETRIEVE_CONCURRENCY: z.coerce.number().int().nonnegative().default(0),
+  NAMESPACE_UPDATE_CONCURRENCY: z.coerce.number().int().nonnegative().default(0),
   MIGRATIONS_MODE: z
     .enum(["off", "validate", "apply"])
     .default("apply") satisfies z.ZodType<MigrationMode>,

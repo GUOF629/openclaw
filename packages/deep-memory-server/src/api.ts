@@ -102,6 +102,7 @@ export function createApi(params: {
   const authz = createAuthz(params.cfg);
   const limiter = new FixedWindowRateLimiter({ windowMs: params.cfg.RATE_LIMIT_WINDOW_MS });
   const lastUpdateAtByKey = new Map<string, number>();
+  const activeRetrieveByNamespace = new Map<string, number>();
   const updateDisabledNamespaces = new Set(
     (params.cfg.UPDATE_DISABLED_NAMESPACES ?? "")
       .split(/[,\s]+/g)
@@ -294,6 +295,10 @@ export function createApi(params: {
           minIntervalMs: params.cfg.UPDATE_MIN_INTERVAL_MS,
           sampleRate: params.cfg.UPDATE_SAMPLE_RATE,
         },
+        namespaceConcurrency: {
+          retrieve: params.cfg.NAMESPACE_RETRIEVE_CONCURRENCY,
+          update: params.cfg.NAMESPACE_UPDATE_CONCURRENCY,
+        },
         sensitiveFilter: {
           enabled: params.cfg.SENSITIVE_FILTER_ENABLED,
           rulesetVersion: params.cfg.SENSITIVE_RULESET_VERSION,
@@ -386,20 +391,44 @@ export function createApi(params: {
     if (!nsCheck.ok) {
       return c.json(nsCheck.body, nsCheck.status);
     }
+
+    const nsRetrieveLimit = params.cfg.NAMESPACE_RETRIEVE_CONCURRENCY;
+    if (nsRetrieveLimit > 0) {
+      const active = activeRetrieveByNamespace.get(namespace) ?? 0;
+      if (active >= nsRetrieveLimit) {
+        c.header("retry-after", "1");
+        return c.json(
+          { error: "namespace_overloaded", namespace, active, limit: nsRetrieveLimit },
+          503,
+        );
+      }
+      activeRetrieveByNamespace.set(namespace, active + 1);
+    }
     const maxMemories = req.max_memories ?? 10;
     const hints = extractHintsFromText(req.user_input);
-    const out: RetrieveContextResponse = await params.retriever.retrieve({
-      namespace,
-      userInput: req.user_input,
-      sessionId: req.session_id,
-      maxMemories,
-      entities: hints.entities,
-      topics: hints.topics,
-    });
-    params.metrics?.retrieveReturnedMemoriesTotal
-      .labels("200")
-      .inc(Array.isArray(out.memories) ? out.memories.length : 0);
-    return c.json(out);
+    try {
+      const out: RetrieveContextResponse = await params.retriever.retrieve({
+        namespace,
+        userInput: req.user_input,
+        sessionId: req.session_id,
+        maxMemories,
+        entities: hints.entities,
+        topics: hints.topics,
+      });
+      params.metrics?.retrieveReturnedMemoriesTotal
+        .labels("200")
+        .inc(Array.isArray(out.memories) ? out.memories.length : 0);
+      return c.json(out);
+    } finally {
+      if (nsRetrieveLimit > 0) {
+        const next = (activeRetrieveByNamespace.get(namespace) ?? 1) - 1;
+        if (next <= 0) {
+          activeRetrieveByNamespace.delete(namespace);
+        } else {
+          activeRetrieveByNamespace.set(namespace, next);
+        }
+      }
+    }
   });
 
   app.post("/update_memory_index", async (c) => {

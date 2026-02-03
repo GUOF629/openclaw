@@ -96,6 +96,7 @@ async function main() {
     log,
     updater,
     concurrency: cfg.UPDATE_CONCURRENCY,
+    namespaceConcurrency: cfg.NAMESPACE_UPDATE_CONCURRENCY,
     dir: cfg.QUEUE_DIR,
     maxAttempts: cfg.QUEUE_MAX_ATTEMPTS,
     retryBaseMs: cfg.QUEUE_RETRY_BASE_MS,
