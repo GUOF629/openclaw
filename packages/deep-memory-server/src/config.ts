@@ -18,6 +18,7 @@ const EnvSchema = z.object({
     .positive()
     .default(2 * 1024 * 1024),
   AUDIT_LOG_PATH: z.string().optional(),
+  ALLOW_UNAUTHENTICATED_METRICS: z.coerce.boolean().default(false),
 
   // Qdrant
   QDRANT_URL: z.string().default("http://qdrant:6333"),

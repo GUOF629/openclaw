@@ -1,4 +1,4 @@
-import { Registry, collectDefaultMetrics, Counter, Histogram } from "prom-client";
+import { Registry, collectDefaultMetrics, Counter, Gauge, Histogram } from "prom-client";
 
 export type DeepMemoryMetrics = ReturnType<typeof createMetrics>;
 
@@ -49,6 +49,22 @@ export function createMetrics() {
     labelNames: ["status"] as const,
   });
 
+  const queuePending = new Gauge({
+    name: "deep_memory_queue_pending",
+    help: "Approx pending update tasks (latest-by-key)",
+    registers: [registry],
+  });
+  const queueActive = new Gauge({
+    name: "deep_memory_queue_active",
+    help: "Active update tasks currently running",
+    registers: [registry],
+  });
+  const queueInflightKeys = new Gauge({
+    name: "deep_memory_queue_inflight_keys",
+    help: "Number of keys currently in-flight (mutual exclusion set size)",
+    registers: [registry],
+  });
+
   return {
     registry,
     httpRequestsTotal,
@@ -57,5 +73,8 @@ export function createMetrics() {
     updateMemoriesAddedTotal,
     updateMemoriesFilteredTotal,
     forgetDeletedTotal,
+    queuePending,
+    queueActive,
+    queueInflightKeys,
   };
 }

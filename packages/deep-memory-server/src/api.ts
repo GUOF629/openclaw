@@ -137,6 +137,13 @@ export function createApi(params: {
       app.use("/metrics", authz.requireRole("admin"));
     }
     app.get("/metrics", async (c) => {
+      if (!authz.required && !params.cfg.ALLOW_UNAUTHENTICATED_METRICS) {
+        return c.text("not found", 404);
+      }
+      const stats = params.queue.stats();
+      params.metrics!.queuePending.set(stats.pendingApprox);
+      params.metrics!.queueActive.set(stats.active);
+      params.metrics!.queueInflightKeys.set(stats.inflightKeys);
       c.header("content-type", params.metrics!.registry.contentType);
       return c.text(await params.metrics!.registry.metrics());
     });
