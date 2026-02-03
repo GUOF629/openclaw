@@ -1,6 +1,7 @@
 import type { Logger } from "pino";
 import { Hono } from "hono";
 import crypto from "node:crypto";
+import { readFileSync } from "node:fs";
 import { z } from "zod";
 import type { DeepMemoryServerConfig } from "./config.js";
 import type { DurableUpdateQueue } from "./durable-update-queue.js";
@@ -15,6 +16,41 @@ import { appendAuditLog } from "./audit-log.js";
 import { createAuthz } from "./authz.js";
 import { enforceBodySize, readJsonWithLimit } from "./body-limit.js";
 import { FixedWindowRateLimiter } from "./rate-limit.js";
+
+type PackageJson = { version?: unknown; name?: unknown };
+
+let cachedServiceVersion: string | null = null;
+
+function getServiceVersion(): string {
+  if (cachedServiceVersion !== null) {
+    return cachedServiceVersion;
+  }
+  try {
+    const raw = readFileSync(new URL("../package.json", import.meta.url), "utf-8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed === "object" && parsed) {
+      const pkg = parsed as PackageJson;
+      if (typeof pkg.version === "string" && pkg.version.trim()) {
+        cachedServiceVersion = pkg.version.trim();
+        return cachedServiceVersion;
+      }
+    }
+  } catch {
+    // ignore: best-effort only (e.g. tests or packaged runtime)
+  }
+  cachedServiceVersion = "unknown";
+  return cachedServiceVersion;
+}
+
+function getBuildInfo(): { sha?: string; ref?: string; time?: string } | undefined {
+  const sha = (process.env.GIT_SHA ?? process.env.BUILD_SHA ?? "").trim() || undefined;
+  const ref = (process.env.GIT_REF ?? process.env.BUILD_REF ?? "").trim() || undefined;
+  const time = (process.env.BUILD_TIME ?? process.env.BUILD_DATE ?? "").trim() || undefined;
+  if (!sha && !ref && !time) {
+    return undefined;
+  }
+  return { sha, ref, time };
+}
 
 const RetrieveSchema = z.object({
   namespace: z.string().optional(),
@@ -60,6 +96,8 @@ export function createApi(params: {
   const app = new Hono();
   const authz = createAuthz(params.cfg);
   const limiter = new FixedWindowRateLimiter({ windowMs: params.cfg.RATE_LIMIT_WINDOW_MS });
+  const serviceVersion = getServiceVersion();
+  const build = getBuildInfo();
 
   const withTimeout = async <T>(
     name: string,
@@ -186,15 +224,71 @@ export function createApi(params: {
     }
   });
 
-  app.get("/health", (c) =>
-    c.json({
+  const buildHealthBody = (details: boolean) => {
+    const queueStats = params.queue.stats();
+    return {
       ok: true,
+      service: {
+        name: "deep-memory-server",
+        version: serviceVersion,
+        build: details ? build : undefined,
+      },
+      runtime: {
+        node: process.version,
+        pid: process.pid,
+        platform: process.platform,
+        arch: process.arch,
+        uptimeSec: Math.max(0, Math.floor(process.uptime())),
+      },
       auth: {
         required: authz.required,
       },
-      queue: params.queue.stats(),
-    }),
-  );
+      deps: details
+        ? {
+            qdrant: {
+              url: params.cfg.QDRANT_URL,
+              collection: params.cfg.QDRANT_COLLECTION,
+              vectorDims: params.cfg.VECTOR_DIMS,
+            },
+            neo4j: {
+              uri: params.cfg.NEO4J_URI,
+              user: params.cfg.NEO4J_USER,
+            },
+          }
+        : undefined,
+      queue: {
+        ...queueStats,
+        dir: params.cfg.QUEUE_DIR,
+        keepDone: params.cfg.QUEUE_KEEP_DONE,
+        retentionDays: params.cfg.QUEUE_RETENTION_DAYS,
+        maxAttempts: params.cfg.QUEUE_MAX_ATTEMPTS,
+        updateConcurrency: params.cfg.UPDATE_CONCURRENCY,
+      },
+      guardrails: {
+        rateLimit: {
+          enabled: params.cfg.RATE_LIMIT_ENABLED,
+          windowMs: params.cfg.RATE_LIMIT_WINDOW_MS,
+          retrievePerWindow: params.cfg.RATE_LIMIT_RETRIEVE_PER_WINDOW,
+          updatePerWindow: params.cfg.RATE_LIMIT_UPDATE_PER_WINDOW,
+          forgetPerWindow: params.cfg.RATE_LIMIT_FORGET_PER_WINDOW,
+          queueAdminPerWindow: params.cfg.RATE_LIMIT_QUEUE_ADMIN_PER_WINDOW,
+        },
+        updateBacklog: {
+          rejectPending: params.cfg.UPDATE_BACKLOG_REJECT_PENDING,
+          retryAfterSeconds: params.cfg.UPDATE_BACKLOG_RETRY_AFTER_SECONDS,
+        },
+      },
+      now: new Date().toISOString(),
+    };
+  };
+
+  app.get("/health", (c) => c.json(buildHealthBody(false)));
+
+  // Detailed health is useful for ops; protect it when API keys are required.
+  if (authz.required) {
+    app.use("/health/details", authz.requireRole("admin"));
+  }
+  app.get("/health/details", (c) => c.json(buildHealthBody(true)));
 
   // Readiness probe: verifies dependencies are reachable within a tight timeout.
   app.get("/readyz", async (c) => {

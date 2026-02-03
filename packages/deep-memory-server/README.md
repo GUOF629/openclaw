@@ -36,7 +36,8 @@ agents: {
 
 ## Endpoints
 
-- `GET /health`: liveness + queue stats
+- `GET /health`: liveness + queue/config guardrail summary
+- `GET /health/details`: detailed health (includes dependency address summary; admin-only when API keys are required)
 - `GET /readyz`: readiness (Qdrant + Neo4j + queue stats; returns 503 on dependency failure)
 - `GET /metrics`: Prometheus metrics (admin-only when API keys are required)
 

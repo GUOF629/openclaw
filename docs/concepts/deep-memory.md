@@ -37,7 +37,8 @@ docker compose --profile deep-memory-prod up -d
 
 ## Observability / probes
 
-- `GET /health`: liveness + queue stats
+- `GET /health`: liveness + queue/config guardrail summary
+- `GET /health/details`: detailed health (includes dependency address summary; admin-only when API keys are required)
 - `GET /readyz`: readiness (Qdrant + Neo4j)
 - `GET /metrics`: Prometheus metrics (admin-only when API keys are required)
 

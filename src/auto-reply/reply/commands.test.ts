@@ -270,6 +270,84 @@ describe("handleCommands /forget", () => {
   });
 });
 
+describe("handleCommands /deepmemory status", () => {
+  it("returns elevated-required message when elevated is blocked", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          deepMemory: { enabled: true, baseUrl: "http://deep-memory.test", timeoutSeconds: 2 },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildParams("/deepmemory status", cfg);
+    params.agentId = "main";
+    params.elevated = {
+      enabled: true,
+      allowed: false,
+      failures: [{ gate: "allowFrom", key: "tools.elevated.allowFrom.whatsapp" }],
+    };
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("/deepmemory status 需要 elevated");
+  });
+
+  it("calls deep-memory-server /health and /readyz", async () => {
+    const seen: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input instanceof Request
+              ? input.url
+              : "";
+      const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+      seen.push({ url, method });
+      if (url.includes("/health")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            service: { name: "deep-memory-server", version: "0.1.0" },
+            guardrails: { rateLimit: { enabled: false }, updateBacklog: { rejectPending: 0 } },
+            queue: { pendingApprox: 0, active: 0, inflightKeys: 0 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.includes("/readyz")) {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          deepMemory: { enabled: true, baseUrl: "http://deep-memory.test", timeoutSeconds: 2 },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildParams("/deepmemory status", cfg);
+    params.agentId = "main";
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Deep memory status");
+    expect(seen.some((x) => x.url.includes("/health") && x.method === "GET")).toBe(true);
+    expect(seen.some((x) => x.url.includes("/readyz") && x.method === "GET")).toBe(true);
+  });
+});
+
 describe("handleCommands bash alias", () => {
   it("routes !poll through the /bash handler", async () => {
     resetBashChatCommandForTests();

@@ -31,6 +31,8 @@ export type DeepMemoryForgetResponse = {
   details?: any;
 };
 
+export type DeepMemoryHealthResponse = Record<string, unknown>;
+
 type CacheEntry<T> = { value: T; expiresAt: number };
 
 export class DeepMemoryClient {
@@ -95,6 +97,30 @@ export class DeepMemoryClient {
           ...(this.apiKey ? { "x-api-key": this.apiKey } : {}),
         },
         body: JSON.stringify(body ?? {}),
+        signal: ctrl.signal,
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status} ${res.statusText}${text ? `: ${text}` : ""}`);
+      }
+      return (await res.json()) as T;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async getJson<T>(path: string): Promise<T> {
+    const url = `${this.baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
+    try {
+      const headers: Record<string, string> = {};
+      if (this.apiKey) {
+        headers["x-api-key"] = this.apiKey;
+      }
+      const res = await fetch(url, {
+        method: "GET",
+        headers,
         signal: ctrl.signal,
       });
       if (!res.ok) {
@@ -175,6 +201,47 @@ export class DeepMemoryClient {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log.warn(`forget failed: ${message}`);
+      return { ok: false, error: message };
+    }
+  }
+
+  async health(params?: {
+    details?: boolean;
+  }): Promise<{ ok: true; value: DeepMemoryHealthResponse } | { ok: false; error: string }> {
+    const details = params?.details ?? false;
+    const path = details ? "/health/details" : "/health";
+    try {
+      const value = await this.getJson<DeepMemoryHealthResponse>(path);
+      return { ok: true, value };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`health failed: ${message}`);
+      return { ok: false, error: message };
+    }
+  }
+
+  async readyz(): Promise<
+    { ok: true; value: Record<string, unknown> } | { ok: false; error: string }
+  > {
+    try {
+      const value = await this.getJson<Record<string, unknown>>("/readyz");
+      return { ok: true, value };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`readyz failed: ${message}`);
+      return { ok: false, error: message };
+    }
+  }
+
+  async queueStats(): Promise<
+    { ok: true; value: Record<string, unknown> } | { ok: false; error: string }
+  > {
+    try {
+      const value = await this.getJson<Record<string, unknown>>("/queue/stats");
+      return { ok: true, value };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`queue stats failed: ${message}`);
       return { ok: false, error: message };
     }
   }

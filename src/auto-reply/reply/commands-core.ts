@@ -12,6 +12,7 @@ import { handleApproveCommand } from "./commands-approve.js";
 import { handleBashCommand } from "./commands-bash.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
+import { handleDeepMemoryStatusCommand } from "./commands-deepmemory.js";
 import { handleForgetCommand } from "./commands-forget.js";
 import {
   handleCommandsListCommand,
@@ -53,6 +54,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleAllowlistCommand,
       handleApproveCommand,
       handleForgetCommand,
+      handleDeepMemoryStatusCommand,
       handleContextCommand,
       handleWhoamiCommand,
       handleSubagentsCommand,
