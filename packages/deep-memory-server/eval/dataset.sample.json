@@ -73,8 +73,7 @@
         "top1Id": "teamA::mem_tz_new",
         "uniqueByMemoryKey": true
       }
-    }
-    ,
+    },
     {
       "name": "semantic only: returns top semantic hit",
       "namespace": "teamA",
