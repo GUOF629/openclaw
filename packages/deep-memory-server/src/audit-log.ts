@@ -14,10 +14,22 @@ type ForgetAuditEntry = {
   ts: string;
   action: "forget";
   namespace: string;
+  requestId?: string;
   dryRun: boolean;
   sessionId?: string;
   memoryIdsCount: number;
   deletedReported?: number;
+  results?: {
+    qdrant?: {
+      bySession?: { ok: boolean; error?: string };
+      byIds?: { ok: boolean; deleted?: number; error?: string };
+    };
+    neo4j?: {
+      bySession?: { ok: boolean; deleted?: number; error?: string };
+      byIds?: { ok: boolean; deleted?: number; error?: string };
+    };
+    queue?: { ok: boolean; cancelled?: number; error?: string };
+  };
   requester: AuditRequester;
 };
 

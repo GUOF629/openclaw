@@ -468,11 +468,13 @@ export function createApi(params: {
 
     const ids = (req.memory_ids ?? []).map((id) => id.trim()).filter(Boolean);
     const normalizedIds = ids.map((id) => (id.includes("::") ? id : `${namespace}::${id}`));
+    const requestId = c.res.headers.get("x-request-id") ?? undefined;
 
     if (dryRun) {
       await appendAuditLog(params.cfg, {
         action: "forget",
         namespace,
+        requestId,
         dryRun: true,
         sessionId: req.session_id ?? undefined,
         memoryIdsCount: normalizedIds.length,
@@ -485,42 +487,69 @@ export function createApi(params: {
       return c.json({
         status: "dry_run",
         namespace,
+        request_id: requestId,
         delete_ids: normalizedIds.length,
         delete_session: req.session_id ? 1 : 0,
       });
     }
 
     let deleted = 0;
+    const results: NonNullable<
+      Parameters<typeof appendAuditLog>[1] & { action: "forget" }
+    >["results"] = {
+      qdrant: {},
+      neo4j: {},
+      queue: { ok: true, cancelled: 0 },
+    };
     if (req.session_id) {
       // Best-effort dual delete.
       try {
         await params.qdrant.deleteBySession({ namespace, sessionId: req.session_id });
-      } catch {}
+        results.qdrant!.bySession = { ok: true };
+      } catch {
+        results.qdrant!.bySession = { ok: false, error: "qdrant deleteBySession failed" };
+      }
       try {
-        deleted += await params.neo4j.deleteMemoriesBySession({
+        const d = await params.neo4j.deleteMemoriesBySession({
           namespace,
           sessionId: req.session_id,
         });
-      } catch {}
+        deleted += d;
+        results.neo4j!.bySession = { ok: true, deleted: d };
+      } catch {
+        results.neo4j!.bySession = { ok: false, error: "neo4j deleteMemoriesBySession failed" };
+      }
       try {
-        await params.queue.cancelBySession({ namespace, sessionId: req.session_id });
-      } catch {}
+        const cancelled = await params.queue.cancelBySession({ namespace, sessionId: req.session_id });
+        results.queue = { ok: true, cancelled };
+      } catch {
+        results.queue = { ok: false, cancelled: 0, error: "queue cancelBySession failed" };
+      }
     }
     if (normalizedIds.length > 0) {
       try {
-        await params.qdrant.deleteByIds({ ids: normalizedIds });
-      } catch {}
+        const d = await params.qdrant.deleteByIds({ ids: normalizedIds });
+        results.qdrant!.byIds = { ok: true, deleted: d };
+      } catch {
+        results.qdrant!.byIds = { ok: false, error: "qdrant deleteByIds failed" };
+      }
       try {
-        deleted += await params.neo4j.deleteMemoriesByIds({ namespace, ids: normalizedIds });
-      } catch {}
+        const d = await params.neo4j.deleteMemoriesByIds({ namespace, ids: normalizedIds });
+        deleted += d;
+        results.neo4j!.byIds = { ok: true, deleted: d };
+      } catch {
+        results.neo4j!.byIds = { ok: false, error: "neo4j deleteMemoriesByIds failed" };
+      }
     }
     await appendAuditLog(params.cfg, {
       action: "forget",
       namespace,
+      requestId,
       dryRun: false,
       sessionId: req.session_id ?? undefined,
       memoryIdsCount: normalizedIds.length,
       deletedReported: deleted,
+      results,
       requester: {
         ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? undefined,
         userAgent: c.req.header("user-agent") ?? undefined,
@@ -528,7 +557,7 @@ export function createApi(params: {
       },
     }).catch(() => {});
     params.metrics?.forgetDeletedTotal.labels("200").inc(deleted);
-    return c.json({ status: "processed", namespace, deleted });
+    return c.json({ status: "processed", namespace, request_id: requestId, deleted, results });
   });
 
   app.get("/queue/stats", (c) => {
