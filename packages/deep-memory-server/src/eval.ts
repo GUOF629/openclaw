@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { z } from "zod";
@@ -72,9 +73,37 @@ type Knobs = {
   frequencyBoost: number;
 };
 
-function parseArgs(argv: string[]): { datasetPath: string; sweep: boolean } {
+type Args = {
+  datasetPath: string;
+  sweep: boolean;
+  outPath?: string;
+  comparePath?: string;
+};
+
+type EvalRunSnapshot = {
+  version: 1;
+  ts: string;
+  datasetPath: string;
+  knobs: Knobs;
+  summary: { ok: boolean; cases: number; avgRecallAtK: number; avgNdcgAtK: number };
+  cases: Array<{
+    name: string;
+    ok: boolean;
+    recallAtK: number;
+    ndcgAtK: number;
+    top1Ok: boolean;
+    errors: string[];
+    expected: Record<string, unknown>;
+    retrievedIds: string[];
+    retrievedMemoryKeys: Array<string | undefined>;
+  }>;
+};
+
+function parseArgs(argv: string[]): Args {
   let datasetPath = path.join(process.cwd(), "eval", "dataset.sample.json");
   let sweep = false;
+  let outPath: string | undefined;
+  let comparePath: string | undefined;
   for (let i = 0; i < argv.length; i += 1) {
     const t = argv[i]?.trim();
     if (!t) {
@@ -92,6 +121,22 @@ function parseArgs(argv: string[]): { datasetPath: string; sweep: boolean } {
       sweep = true;
       continue;
     }
+    if (t === "--out") {
+      const v = argv[i + 1]?.trim();
+      if (v) {
+        outPath = v;
+      }
+      i += 1;
+      continue;
+    }
+    if (t === "--compare") {
+      const v = argv[i + 1]?.trim();
+      if (v) {
+        comparePath = v;
+      }
+      i += 1;
+      continue;
+    }
     if (t === "--help" || t === "-h") {
       // eslint-disable-next-line no-console
       console.log(`
@@ -100,12 +145,14 @@ Usage: pnpm --dir packages/deep-memory-server eval -- [options]
 Options:
   --dataset, -d <path>     Dataset JSON file (default: eval/dataset.sample.json)
   --sweep                  Run a small parameter sweep (thresholds/weights)
+  --out <path>             Write a JSON snapshot of results (for baseline/compare)
+  --compare <path>         Compare current run vs a baseline snapshot JSON
   --help, -h               Show help
 `);
       process.exit(0);
     }
   }
-  return { datasetPath, sweep };
+  return { datasetPath, sweep, outPath, comparePath };
 }
 
 async function loadDataset(datasetPath: string): Promise<EvalDataset> {
@@ -137,6 +184,11 @@ function formatScore(x: number): string {
   return `${(x * 100).toFixed(1)}%`;
 }
 
+function formatDelta(x: number): string {
+  const pct = (x * 100).toFixed(2);
+  return x >= 0 ? `+${pct}pp` : `${pct}pp`;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const dataset = await loadDataset(args.datasetPath);
@@ -156,12 +208,70 @@ async function main() {
     console.log(
       `eval: ok=${out.ok} cases=${out.cases.length} recall@k=${formatScore(out.avgRecallAtK)} ndcg@k=${formatScore(out.avgNdcgAtK)}`,
     );
-    for (const c of out.cases) {
-      if (c.ok) {
-        continue;
+    const snapshot: EvalRunSnapshot = {
+      version: 1,
+      ts: new Date().toISOString(),
+      datasetPath: args.datasetPath,
+      knobs: base,
+      summary: {
+        ok: out.ok,
+        cases: out.cases.length,
+        avgRecallAtK: out.avgRecallAtK,
+        avgNdcgAtK: out.avgNdcgAtK,
+      },
+      cases: out.cases.map((c) => ({
+        name: c.name,
+        ok: c.ok,
+        recallAtK: c.recallAtK,
+        ndcgAtK: c.ndcgAtK,
+        top1Ok: c.top1Ok,
+        errors: c.errors,
+        expected: c.expected as unknown as Record<string, unknown>,
+        retrievedIds: c.retrievedIds,
+        retrievedMemoryKeys: c.retrievedMemoryKeys,
+      })),
+    };
+    if (args.outPath) {
+      await writeFile(args.outPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+      // eslint-disable-next-line no-console
+      console.log(`eval: wrote snapshot to ${args.outPath}`);
+    }
+    if (args.comparePath) {
+      const raw = await readFile(args.comparePath, "utf8");
+      const baseline = JSON.parse(raw) as EvalRunSnapshot;
+      const baseByName = new Map(baseline.cases.map((c) => [c.name, c]));
+      // eslint-disable-next-line no-console
+      console.log(
+        `eval: compare baseline=${args.comparePath} (baseline ok=${baseline.summary.ok} ndcg@k=${formatScore(baseline.summary.avgNdcgAtK)})`,
+      );
+      for (const c of snapshot.cases) {
+        const b = baseByName.get(c.name);
+        if (!b) {
+          // eslint-disable-next-line no-console
+          console.log(`- NEW: ${c.name}`);
+          continue;
+        }
+        const dRecall = c.recallAtK - b.recallAtK;
+        const dNdcg = c.ndcgAtK - b.ndcgAtK;
+        if (dRecall === 0 && dNdcg === 0 && c.ok === b.ok) {
+          continue;
+        }
+        // eslint-disable-next-line no-console
+        console.log(
+          `- ${c.name}: ok ${b.ok}→${c.ok} recall ${formatScore(b.recallAtK)}→${formatScore(c.recallAtK)} (${formatDelta(dRecall)}) ndcg ${formatScore(b.ndcgAtK)}→${formatScore(c.ndcgAtK)} (${formatDelta(dNdcg)})`,
+        );
       }
+    }
+    for (const c of snapshot.cases) {
+      if (c.ok) continue;
       // eslint-disable-next-line no-console
       console.log(`- FAIL: ${c.name}`);
+      // eslint-disable-next-line no-console
+      console.log(`  expected: ${JSON.stringify(c.expected)}`);
+      // eslint-disable-next-line no-console
+      console.log(`  retrievedIds: ${JSON.stringify(c.retrievedIds)}`);
+      // eslint-disable-next-line no-console
+      console.log(`  retrievedMemoryKeys: ${JSON.stringify(c.retrievedMemoryKeys)}`);
       for (const e of c.errors) {
         // eslint-disable-next-line no-console
         console.log(`  - ${e}`);

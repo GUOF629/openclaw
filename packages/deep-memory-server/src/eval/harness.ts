@@ -12,6 +12,12 @@ export type EvalCaseResult = {
   recallAtK: number;
   ndcgAtK: number;
   top1Ok: boolean;
+  expected: {
+    includeIds?: string[];
+    excludeIds?: string[];
+    top1Id?: string;
+    uniqueByMemoryKey?: boolean;
+  };
 };
 
 export function withFixedNow<T>(isoNow: string, fn: () => T): T {
@@ -128,6 +134,7 @@ export async function runEvalCase(params: {
     recallAtK: recallAtK({ predicted: retrievedIds, relevant, k }),
     ndcgAtK: ndcgAtK({ predicted: retrievedIds, relevant, k }),
     top1Ok,
+    expected: c.expect,
   };
 }
 
