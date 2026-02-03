@@ -7,6 +7,7 @@ import { loadConfig } from "./config.js";
 import { DurableUpdateQueue } from "./durable-update-queue.js";
 import { EmbeddingModel } from "./embeddings.js";
 import { createLogger } from "./logger.js";
+import { createMetrics } from "./metrics.js";
 import { Neo4jStore } from "./neo4j.js";
 import { QdrantStore } from "./qdrant.js";
 import { DeepMemoryRetriever } from "./retriever.js";
@@ -107,6 +108,7 @@ async function main() {
     qdrant,
     neo4j,
     queue: updateQueue,
+    metrics: createMetrics(),
   });
 
   const server = serve({ fetch: app.fetch, port: cfg.PORT, hostname: cfg.HOST });

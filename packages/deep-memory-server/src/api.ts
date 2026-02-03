@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { DeepMemoryServerConfig } from "./config.js";
 import type { DurableUpdateQueue } from "./durable-update-queue.js";
+import type { DeepMemoryMetrics } from "./metrics.js";
 import type { Neo4jStore } from "./neo4j.js";
 import type { QdrantStore } from "./qdrant.js";
 import type { DeepMemoryRetriever } from "./retriever.js";
@@ -50,6 +51,7 @@ export function createApi(params: {
   qdrant: QdrantStore;
   neo4j: Neo4jStore;
   queue: DurableUpdateQueue;
+  metrics?: DeepMemoryMetrics;
 }) {
   const app = new Hono();
   const authz = createAuthz(params.cfg);
@@ -66,6 +68,35 @@ export function createApi(params: {
   if (authz.required) {
     app.use("/retrieve_context", authz.requireRole("read"));
   }
+
+  // Metrics endpoint: protected if auth is required (recommended).
+  if (params.metrics) {
+    if (authz.required) {
+      app.use("/metrics", authz.requireRole("admin"));
+    }
+    app.get("/metrics", async (c) => {
+      c.header("content-type", params.metrics!.registry.contentType);
+      return c.text(await params.metrics!.registry.metrics());
+    });
+  }
+
+  // Request-level metrics: best-effort, route key uses path (stable).
+  app.use("*", async (c, next) => {
+    const start = performance.now();
+    try {
+      await next();
+    } finally {
+      const metrics = params.metrics;
+      if (metrics) {
+        const route = c.req.path;
+        const method = c.req.method;
+        const status = String(c.res.status ?? 200);
+        const seconds = Math.max(0, (performance.now() - start) / 1000);
+        metrics.httpRequestsTotal.labels(route, method, status).inc();
+        metrics.httpRequestDurationSeconds.labels(route, method, status).observe(seconds);
+      }
+    }
+  });
 
   app.get("/health", (c) => c.json({ ok: true }));
 
@@ -97,6 +128,9 @@ export function createApi(params: {
       entities: hints.entities,
       topics: hints.topics,
     });
+    params.metrics?.retrieveReturnedMemoriesTotal
+      .labels("200")
+      .inc(Array.isArray(out.memories) ? out.memories.length : 0);
     return c.json(out);
   });
 
@@ -135,6 +169,8 @@ export function createApi(params: {
       sessionId: req.session_id,
       messages: req.messages,
     });
+    params.metrics?.updateMemoriesAddedTotal.labels("200").inc(result.memories_added ?? 0);
+    params.metrics?.updateMemoriesFilteredTotal.labels("200").inc(result.memories_filtered ?? 0);
     return c.json(result);
   });
 
@@ -221,6 +257,7 @@ export function createApi(params: {
         keyId: authz.getAuth(c)?.keyId,
       },
     }).catch(() => {});
+    params.metrics?.forgetDeletedTotal.labels("200").inc(deleted);
     return c.json({ status: "processed", namespace, deleted });
   });
 
