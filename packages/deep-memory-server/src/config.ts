@@ -19,6 +19,14 @@ const EnvSchema = z.object({
     .default(2 * 1024 * 1024),
   AUDIT_LOG_PATH: z.string().optional(),
   ALLOW_UNAUTHENTICATED_METRICS: z.coerce.boolean().default(false),
+  RATE_LIMIT_ENABLED: z.coerce.boolean().default(false),
+  RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+  RATE_LIMIT_RETRIEVE_PER_WINDOW: z.coerce.number().int().nonnegative().default(0),
+  RATE_LIMIT_UPDATE_PER_WINDOW: z.coerce.number().int().nonnegative().default(0),
+  RATE_LIMIT_FORGET_PER_WINDOW: z.coerce.number().int().nonnegative().default(0),
+  RATE_LIMIT_QUEUE_ADMIN_PER_WINDOW: z.coerce.number().int().nonnegative().default(0),
+  UPDATE_BACKLOG_REJECT_PENDING: z.coerce.number().int().nonnegative().default(0),
+  UPDATE_BACKLOG_RETRY_AFTER_SECONDS: z.coerce.number().int().positive().default(30),
 
   // Qdrant
   QDRANT_URL: z.string().default("http://qdrant:6333"),

@@ -14,6 +14,7 @@ import { extractHintsFromText } from "./analyzer.js";
 import { appendAuditLog } from "./audit-log.js";
 import { createAuthz } from "./authz.js";
 import { enforceBodySize, readJsonWithLimit } from "./body-limit.js";
+import { FixedWindowRateLimiter } from "./rate-limit.js";
 
 const RetrieveSchema = z.object({
   namespace: z.string().optional(),
@@ -58,6 +59,7 @@ export function createApi(params: {
 }) {
   const app = new Hono();
   const authz = createAuthz(params.cfg);
+  const limiter = new FixedWindowRateLimiter({ windowMs: params.cfg.RATE_LIMIT_WINDOW_MS });
 
   const withTimeout = async <T>(
     name: string,
@@ -131,6 +133,23 @@ export function createApi(params: {
     app.use("/retrieve_context", authz.requireRole("read"));
   }
 
+  const checkRateLimit = (c: import("hono").Context, route: string, limit: number) => {
+    if (!params.cfg.RATE_LIMIT_ENABLED) {
+      return { ok: true as const };
+    }
+    if (limit <= 0) {
+      return { ok: true as const };
+    }
+    const keyId = authz.getAuth(c)?.keyId ?? "anon";
+    const out = limiter.take({ key: `${keyId}::${route}`, limit });
+    if (!out.ok) {
+      const retryAfterSeconds = Math.max(1, Math.ceil((out.resetAtMs - Date.now()) / 1000));
+      c.header("retry-after", String(retryAfterSeconds));
+      return { ok: false as const };
+    }
+    return { ok: true as const };
+  };
+
   // Metrics endpoint: protected if auth is required (recommended).
   if (params.metrics) {
     if (authz.required) {
@@ -200,6 +219,10 @@ export function createApi(params: {
   });
 
   app.post("/retrieve_context", async (c) => {
+    const rl = checkRateLimit(c, "/retrieve_context", params.cfg.RATE_LIMIT_RETRIEVE_PER_WINDOW);
+    if (!rl.ok) {
+      return c.json({ error: "rate_limited" }, 429);
+    }
     const body = await readJsonWithLimit<Record<string, unknown>>(c, {
       limitBytes: params.cfg.MAX_BODY_BYTES,
       fallback: {},
@@ -234,6 +257,10 @@ export function createApi(params: {
   });
 
   app.post("/update_memory_index", async (c) => {
+    const rl = checkRateLimit(c, "/update_memory_index", params.cfg.RATE_LIMIT_UPDATE_PER_WINDOW);
+    if (!rl.ok) {
+      return c.json({ error: "rate_limited" }, 429);
+    }
     const body = await readJsonWithLimit<Record<string, unknown>>(c, {
       limitBytes: params.cfg.MAX_UPDATE_BODY_BYTES,
       fallback: {},
@@ -254,6 +281,22 @@ export function createApi(params: {
     const runAsync = req.async ?? true;
 
     if (runAsync) {
+      const rejectPending = params.cfg.UPDATE_BACKLOG_REJECT_PENDING;
+      if (rejectPending > 0) {
+        const stats = params.queue.stats();
+        if (stats.pendingApprox >= rejectPending) {
+          const retryAfter = params.cfg.UPDATE_BACKLOG_RETRY_AFTER_SECONDS;
+          c.header("retry-after", String(retryAfter));
+          return c.json(
+            {
+              error: "queue_overloaded",
+              pendingApprox: stats.pendingApprox,
+              retryAfterSeconds: retryAfter,
+            },
+            503,
+          );
+        }
+      }
       void params.queue.enqueue({ namespace, sessionId: req.session_id, messages: req.messages });
       const resp: UpdateMemoryIndexResponse = {
         status: "queued",
@@ -276,6 +319,10 @@ export function createApi(params: {
   // Minimal “forget” API: delete by explicit ids or by session.
   // This is intentionally best-effort and should be protected at the network layer.
   app.post("/forget", async (c) => {
+    const rl = checkRateLimit(c, "/forget", params.cfg.RATE_LIMIT_FORGET_PER_WINDOW);
+    if (!rl.ok) {
+      return c.json({ error: "rate_limited" }, 429);
+    }
     const body = await readJsonWithLimit<Record<string, unknown>>(c, {
       limitBytes: params.cfg.MAX_BODY_BYTES,
       fallback: {},
@@ -361,10 +408,18 @@ export function createApi(params: {
   });
 
   app.get("/queue/stats", (c) => {
+    const rl = checkRateLimit(c, "/queue", params.cfg.RATE_LIMIT_QUEUE_ADMIN_PER_WINDOW);
+    if (!rl.ok) {
+      return c.json({ error: "rate_limited" }, 429);
+    }
     return c.json({ ok: true, ...params.queue.stats() });
   });
 
   app.get("/queue/failed", async (c) => {
+    const rl = checkRateLimit(c, "/queue", params.cfg.RATE_LIMIT_QUEUE_ADMIN_PER_WINDOW);
+    if (!rl.ok) {
+      return c.json({ error: "rate_limited" }, 429);
+    }
     const limitRaw = c.req.query("limit");
     const limit = Math.max(1, Math.min(200, Number(limitRaw ?? 50) || 50));
     const items = await params.queue.listFailed({ limit });
@@ -372,6 +427,10 @@ export function createApi(params: {
   });
 
   app.get("/queue/failed/export", async (c) => {
+    const rl = checkRateLimit(c, "/queue", params.cfg.RATE_LIMIT_QUEUE_ADMIN_PER_WINDOW);
+    if (!rl.ok) {
+      return c.json({ error: "rate_limited" }, 429);
+    }
     const file = c.req.query("file") ?? undefined;
     const key = c.req.query("key") ?? undefined;
     const limitRaw = c.req.query("limit");
@@ -400,6 +459,10 @@ export function createApi(params: {
   });
 
   app.post("/queue/failed/retry", async (c) => {
+    const rl = checkRateLimit(c, "/queue", params.cfg.RATE_LIMIT_QUEUE_ADMIN_PER_WINDOW);
+    if (!rl.ok) {
+      return c.json({ error: "rate_limited" }, 429);
+    }
     const body = await readJsonWithLimit<Record<string, unknown>>(c, {
       limitBytes: params.cfg.MAX_BODY_BYTES,
       fallback: {},
