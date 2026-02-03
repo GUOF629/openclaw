@@ -14,6 +14,7 @@ import { QdrantStore } from "./qdrant.js";
 import { DeepMemoryRetriever } from "./retriever.js";
 import { DEEPMEM_SCHEMA_VERSION } from "./schema.js";
 import { DeepMemoryUpdater } from "./updater.js";
+import { createSensitiveFilter } from "./safety.js";
 
 async function main() {
   const cfg = loadConfig();
@@ -88,6 +89,7 @@ async function main() {
     dedupeScore: cfg.DEDUPE_SCORE,
     relatedTopK: cfg.RELATED_TOPK,
     sensitiveFilterEnabled: cfg.SENSITIVE_FILTER_ENABLED,
+    sensitiveFilter: createSensitiveFilter(cfg),
   });
 
   const updateQueue = new DurableUpdateQueue({

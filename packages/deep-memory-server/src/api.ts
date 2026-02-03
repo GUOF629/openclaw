@@ -294,6 +294,12 @@ export function createApi(params: {
           minIntervalMs: params.cfg.UPDATE_MIN_INTERVAL_MS,
           sampleRate: params.cfg.UPDATE_SAMPLE_RATE,
         },
+        sensitiveFilter: {
+          enabled: params.cfg.SENSITIVE_FILTER_ENABLED,
+          rulesetVersion: params.cfg.SENSITIVE_RULESET_VERSION,
+          customAllow: params.cfg.SENSITIVE_ALLOW_REGEX_JSON ? true : false,
+          customDeny: params.cfg.SENSITIVE_DENY_REGEX_JSON ? true : false,
+        },
       },
       schema: details
         ? {

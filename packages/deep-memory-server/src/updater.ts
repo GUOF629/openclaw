@@ -5,7 +5,8 @@ import { EmbeddingModel } from "./embeddings.js";
 import { computeImportance } from "./importance.js";
 import { Neo4jStore } from "./neo4j.js";
 import { QdrantStore, type QdrantMemoryPayload } from "./qdrant.js";
-import { looksSensitive } from "./safety.js";
+import type { SensitiveFilter } from "./safety.js";
+import { createSensitiveFilter } from "./safety.js";
 import { clamp, stableHash } from "./utils.js";
 
 export class DeepMemoryUpdater {
@@ -19,6 +20,7 @@ export class DeepMemoryUpdater {
   private readonly dedupeScore: number;
   private readonly relatedTopK: number;
   private readonly sensitiveFilterEnabled: boolean;
+  private readonly sensitiveFilter: SensitiveFilter;
 
   constructor(params: {
     analyzer: SessionAnalyzer;
@@ -31,6 +33,7 @@ export class DeepMemoryUpdater {
     dedupeScore: number;
     relatedTopK: number;
     sensitiveFilterEnabled: boolean;
+    sensitiveFilter?: SensitiveFilter;
   }) {
     this.analyzer = params.analyzer;
     this.embedder = params.embedder;
@@ -42,6 +45,13 @@ export class DeepMemoryUpdater {
     this.dedupeScore = params.dedupeScore;
     this.relatedTopK = Math.max(0, params.relatedTopK);
     this.sensitiveFilterEnabled = params.sensitiveFilterEnabled;
+    this.sensitiveFilter =
+      params.sensitiveFilter ??
+      createSensitiveFilter({
+        SENSITIVE_RULESET_VERSION: "builtin-v1",
+        SENSITIVE_ALLOW_REGEX_JSON: undefined,
+        SENSITIVE_DENY_REGEX_JSON: undefined,
+      });
   }
 
   async update(params: {
@@ -129,9 +139,12 @@ export class DeepMemoryUpdater {
     }
     const nowIso = new Date().toISOString();
     for (const draft of analysis.drafts) {
-      if (this.sensitiveFilterEnabled && looksSensitive(draft.content)) {
-        filtered += 1;
-        continue;
+      if (this.sensitiveFilterEnabled) {
+        const det = this.sensitiveFilter.detect(draft.content);
+        if (det.sensitive) {
+          filtered += 1;
+          continue;
+        }
       }
 
       const vec = await this.embedder.embed(draft.content);

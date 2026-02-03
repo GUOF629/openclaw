@@ -82,6 +82,9 @@ const EnvSchema = z.object({
   FREQUENCY_BOOST: z.coerce.number().min(0).max(2).default(0.2),
   RELATED_TOPK: z.coerce.number().int().nonnegative().default(5),
   SENSITIVE_FILTER_ENABLED: z.coerce.boolean().default(true),
+  SENSITIVE_RULESET_VERSION: z.string().default("builtin-v1"),
+  SENSITIVE_DENY_REGEX_JSON: z.string().optional(),
+  SENSITIVE_ALLOW_REGEX_JSON: z.string().optional(),
 
   // Embeddings
   EMBEDDING_MODEL: z.string().default("Xenova/bge-small-en-v1.5"),
