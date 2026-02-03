@@ -4,7 +4,10 @@ type SensitiveRule = { id: string; re: RegExp };
 
 const BUILTIN_DENY: SensitiveRule[] = [
   { id: "private_key_block", re: /-----BEGIN (?:RSA|EC|OPENSSH|PGP|DSA)? ?PRIVATE KEY-----/i },
-  { id: "keyword_assignment", re: /\b(?:api[_-]?key|secret|password|passwd|token)\b\s*[:=]\s*\S+/i },
+  {
+    id: "keyword_assignment",
+    re: /\b(?:api[_-]?key|secret|password|passwd|token)\b\s*[:=]\s*\S+/i,
+  },
   { id: "secret_prefix", re: /\b(?:sk|rk)_[A-Za-z0-9]{20,}\b/ },
   { id: "long_hex", re: /\b[A-Fa-f0-9]{32,}\b/ },
   { id: "long_digits", re: /\b\d{14,}\b/ },
@@ -51,10 +54,12 @@ export type SensitiveFilter = {
   detect: (text: string) => SensitiveDetection;
 };
 
-export function createSensitiveFilter(cfg: Pick<
-  DeepMemoryServerConfig,
-  "SENSITIVE_RULESET_VERSION" | "SENSITIVE_DENY_REGEX_JSON" | "SENSITIVE_ALLOW_REGEX_JSON"
->): SensitiveFilter {
+export function createSensitiveFilter(
+  cfg: Pick<
+    DeepMemoryServerConfig,
+    "SENSITIVE_RULESET_VERSION" | "SENSITIVE_DENY_REGEX_JSON" | "SENSITIVE_ALLOW_REGEX_JSON"
+  >,
+): SensitiveFilter {
   const version = cfg.SENSITIVE_RULESET_VERSION?.trim() || "builtin-v1";
   const deny = [...BUILTIN_DENY, ...compileRegexList(cfg.SENSITIVE_DENY_REGEX_JSON, "deny")];
   const allow = compileRegexList(cfg.SENSITIVE_ALLOW_REGEX_JSON, "allow");

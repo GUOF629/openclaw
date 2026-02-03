@@ -23,4 +23,3 @@ describe("sensitive filter", () => {
     expect(r.sensitive).toBe(false);
   });
 });
-

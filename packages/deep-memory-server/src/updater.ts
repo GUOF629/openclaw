@@ -1,11 +1,11 @@
 import crypto from "node:crypto";
+import type { SensitiveFilter } from "./safety.js";
 import type { UpdateMemoryIndexResponse } from "./types.js";
 import { SessionAnalyzer } from "./analyzer.js";
 import { EmbeddingModel } from "./embeddings.js";
 import { computeImportance } from "./importance.js";
 import { Neo4jStore } from "./neo4j.js";
 import { QdrantStore, type QdrantMemoryPayload } from "./qdrant.js";
-import type { SensitiveFilter } from "./safety.js";
 import { createSensitiveFilter } from "./safety.js";
 import { clamp, stableHash } from "./utils.js";
 

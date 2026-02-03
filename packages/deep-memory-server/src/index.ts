@@ -12,9 +12,9 @@ import { createMetrics } from "./metrics.js";
 import { Neo4jStore } from "./neo4j.js";
 import { QdrantStore } from "./qdrant.js";
 import { DeepMemoryRetriever } from "./retriever.js";
+import { createSensitiveFilter } from "./safety.js";
 import { DEEPMEM_SCHEMA_VERSION } from "./schema.js";
 import { DeepMemoryUpdater } from "./updater.js";
-import { createSensitiveFilter } from "./safety.js";
 
 async function main() {
   const cfg = loadConfig();
