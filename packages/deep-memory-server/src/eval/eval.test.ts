@@ -28,4 +28,28 @@ describe("eval dataset baseline", () => {
     const results = await Promise.all(cases);
     expect(results.every((r) => r.ok)).toBe(true);
   });
+
+  it("meets minimum quality thresholds (avg recall@k / ndcg@k)", async () => {
+    const raw = await readFile(datasetPath, "utf-8");
+    const dataset = JSON.parse(raw) as EvalDataset;
+    const knobs = {
+      minSemanticScore: 0.6,
+      semanticWeight: 0.6,
+      relationWeight: 0.4,
+      decayHalfLifeDays: 90,
+      importanceBoost: 0.3,
+      frequencyBoost: 0.2,
+    };
+    const summaries = await Promise.all(
+      dataset.cases.map(async (c) => {
+        const retriever = createRetrieverForEval({ evalCase: c, knobs });
+        return await runEval({ retriever, cases: [c] });
+      }),
+    );
+    const cases = summaries.flatMap((s) => s.cases);
+    const avgRecallAtK = cases.reduce((sum, c) => sum + c.recallAtK, 0) / Math.max(1, cases.length);
+    const avgNdcgAtK = cases.reduce((sum, c) => sum + c.ndcgAtK, 0) / Math.max(1, cases.length);
+    expect(avgRecallAtK).toBeGreaterThanOrEqual(0.9);
+    expect(avgNdcgAtK).toBeGreaterThanOrEqual(0.9);
+  });
 });
