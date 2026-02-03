@@ -213,4 +213,20 @@ export class QdrantStore {
       },
     });
   }
+
+  async countMemories(params?: { namespace?: string }): Promise<number> {
+    const res = await this.client.count(this.collection, {
+      exact: true,
+      ...(params?.namespace
+        ? {
+            filter: {
+              must: [{ key: "namespace", match: { value: params.namespace } }],
+            },
+          }
+        : {}),
+    });
+    const cnt = (res as unknown as { count?: unknown }).count;
+    const n = typeof cnt === "number" ? cnt : Number(cnt ?? 0);
+    return Number.isFinite(n) ? n : 0;
+  }
 }

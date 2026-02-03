@@ -904,4 +904,44 @@ export class Neo4jStore {
       await session.close();
     }
   }
+
+  async countMemories(params: { namespace?: string }): Promise<number> {
+    const session = this.driver.session();
+    try {
+      const res = await session.run(
+        `
+        MATCH (m:Memory)
+        WHERE ($ns IS NULL OR m.namespace = $ns)
+        RETURN count(m) AS cnt
+        `,
+        { ns: params.namespace ?? null },
+      );
+      const row = res.records[0];
+      const cnt = row ? Number(row.get("cnt") ?? 0) : 0;
+      return Number.isFinite(cnt) ? cnt : 0;
+    } finally {
+      await session.close();
+    }
+  }
+
+  async listNamespaces(params?: { limit?: number }): Promise<string[]> {
+    const limit = Math.max(1, Math.min(10_000, Math.floor(params?.limit ?? 1000)));
+    const session = this.driver.session();
+    try {
+      const res = await session.run(
+        `
+        MATCH (m:Memory)
+        WITH DISTINCT coalesce(m.namespace, "") AS ns
+        WHERE ns <> ""
+        RETURN ns
+        ORDER BY ns ASC
+        LIMIT $limit
+        `,
+        { limit },
+      );
+      return res.records.map((r) => String(r.get("ns") ?? "")).filter((s) => s.trim().length > 0);
+    } finally {
+      await session.close();
+    }
+  }
 }

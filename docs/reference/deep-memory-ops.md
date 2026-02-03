@@ -232,6 +232,23 @@ Notes:
 - The reindex job reads `Memory` nodes from Neo4j and writes points to the target Qdrant collection.
 - It does **not** delete the old collection. Switch `QDRANT_COLLECTION` after you validate the new one.
 
+### Validate a reindex (coverage + spot-check)
+
+After reindexing into a new collection, validate that Qdrant contains the expected points and payloads:
+
+```bash
+pnpm --dir packages/deep-memory-server validate-reindex -- \
+  --namespace teamA \
+  --target-collection openclaw_memories_v2 \
+  --sample-size 50 \
+  --out reindex-report.teamA.json
+```
+
+This tool:
+
+- Compares **Neo4j count vs Qdrant count** (per namespace)
+- Samples memories from Neo4j and verifies the **Qdrant payload exists** and matches expected fields
+
 ### Rollback: Qdrant collection migration
 
 If a new collection shows degraded recall quality or performance:
