@@ -185,6 +185,34 @@ Key env vars:
 **Qdrant dims changes:** if you change `VECTOR_DIMS`, the existing collection cannot be resized in-place.
 Recommended migration is to create a new collection (new name), run a reindex job, then switch `QDRANT_COLLECTION`.
 
+### Reindex job (Qdrant collection migration)
+
+When you need to migrate Qdrant collections (for example, after changing `VECTOR_DIMS` or renaming collections), you can re-embed and repopulate Qdrant from Neo4j:
+
+```bash
+# Reindex a single namespace into a new collection (recommended)
+pnpm --dir packages/deep-memory-server reindex -- \
+  --namespace teamA \
+  --target-collection openclaw_memories_v2
+
+# Canary: only process first 200 memories
+pnpm --dir packages/deep-memory-server reindex -- \
+  --namespace teamA \
+  --target-collection openclaw_memories_v2 \
+  --max-items 200
+
+# Dry-run scan (no embeddings, no Qdrant writes)
+pnpm --dir packages/deep-memory-server reindex -- \
+  --namespace teamA \
+  --target-collection openclaw_memories_v2 \
+  --dry-run
+```
+
+Notes:
+
+- The reindex job reads `Memory` nodes from Neo4j and writes points to the target Qdrant collection.
+- It does **not** delete the old collection. Switch `QDRANT_COLLECTION` after you validate the new one.
+
 ## Key rotation (API_KEYS_JSON)
 
 Safe rotation sequence:

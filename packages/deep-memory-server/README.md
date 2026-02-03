@@ -61,3 +61,13 @@ Notable knobs:
 - Strongly recommended: set `REQUIRE_API_KEY=true` and configure `API_KEYS_JSON` with per-role keys (`read`, `write`, `admin`).
 - Keep `QUEUE_DIR` on persistent storage (container volume) so async ingestion survives restarts.
 - Use `/metrics` + `/readyz` for monitoring and alerting (queue backlog, error rates, dependency availability).
+
+## Reindex (Qdrant collection migration)
+
+If you need to repopulate a Qdrant collection (for example after changing `VECTOR_DIMS`), you can re-embed memories from Neo4j:
+
+```bash
+pnpm --dir packages/deep-memory-server reindex -- \
+  --namespace default \
+  --target-collection openclaw_memories_v2
+```

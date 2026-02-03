@@ -256,6 +256,16 @@ export class Neo4jStore {
     return `${namespace}::`;
   }
 
+  private parseSessionIdFromNodeId(nodeId: string): string | undefined {
+    // Format: `${namespace}::session::<sessionId>`
+    const idx = nodeId.indexOf("session::");
+    if (idx < 0) {
+      return undefined;
+    }
+    const out = nodeId.slice(idx + "session::".length);
+    return out.trim() || undefined;
+  }
+
   private sessionNodeId(namespace: string, sessionId: string): string {
     return `${this.prefix(namespace)}session::${sessionId}`;
   }
@@ -775,6 +785,121 @@ export class Neo4jStore {
       const row = res.records[0];
       const deleted = row ? Number(row.get("deleted") ?? 0) : 0;
       return Number.isFinite(deleted) ? deleted : 0;
+    } finally {
+      await session.close();
+    }
+  }
+
+  async scanMemories(params: { namespace?: string; afterId?: string; limit: number }): Promise<
+    Array<{
+      id: string;
+      namespace: string;
+      content: string;
+      kind?: string;
+      memoryKey?: string;
+      subject?: string;
+      expiresAt?: string;
+      confidence?: number;
+      importance: number;
+      frequency: number;
+      createdAt: string;
+      sessionId?: string;
+      topics: string[];
+      entities: Array<{ name: string; type?: string }>;
+    }>
+  > {
+    const limit = Math.max(1, Math.min(1000, Math.floor(params.limit)));
+    const session = this.driver.session();
+    try {
+      const res = await session.run(
+        `
+        MATCH (m:Memory)
+        WHERE ($ns IS NULL OR m.namespace = $ns)
+          AND ($afterId IS NULL OR m.id > $afterId)
+        OPTIONAL MATCH (m)-[:FROM_SESSION]->(s:Session)
+        OPTIONAL MATCH (m)-[:ABOUT_TOPIC]->(t:Topic)
+        OPTIONAL MATCH (m)-[:ABOUT_ENTITY]->(e:Entity)
+        WITH m, s,
+             collect(DISTINCT t.name) AS topics,
+             collect(DISTINCT {name: e.name, type: e.type}) AS entities
+        RETURN
+          m.id AS id,
+          coalesce(m.namespace, "") AS namespace,
+          coalesce(m.content, "") AS content,
+          toString(coalesce(m.created_at, datetime())) AS createdAt,
+          coalesce(m.kind, "") AS kind,
+          coalesce(m.memory_key, "") AS memoryKey,
+          coalesce(m.subject, "") AS subject,
+          toString(coalesce(m.expires_at, "")) AS expiresAt,
+          coalesce(m.confidence, 0.0) AS confidence,
+          coalesce(m.importance, 0.0) AS importance,
+          coalesce(m.frequency, 0) AS frequency,
+          coalesce(s.id, "") AS sessionNodeId,
+          topics AS topics,
+          entities AS entities
+        ORDER BY id ASC
+        LIMIT $limit
+        `,
+        {
+          ns: params.namespace ?? null,
+          afterId: params.afterId ?? null,
+          limit,
+        },
+      );
+
+      return res.records.map((r) => {
+        const sessionNodeId = String(r.get("sessionNodeId") ?? "");
+        const topicsRaw = r.get("topics") as unknown;
+        const entitiesRaw = r.get("entities") as unknown;
+
+        const topics = Array.isArray(topicsRaw)
+          ? topicsRaw.map((t) => String(t)).filter((t) => t.trim().length > 0)
+          : [];
+        const entities = Array.isArray(entitiesRaw)
+          ? entitiesRaw
+              .map((x) => {
+                if (typeof x !== "object" || !x) {
+                  return null;
+                }
+                const rec = x as Record<string, unknown>;
+                const name = typeof rec.name === "string" ? rec.name.trim() : "";
+                if (!name) {
+                  return null;
+                }
+                const type = typeof rec.type === "string" ? rec.type.trim() : undefined;
+                return { name, type };
+              })
+              .filter(Boolean)
+          : [];
+
+        const kindRaw = String(r.get("kind") ?? "");
+        const memoryKeyRaw = String(r.get("memoryKey") ?? "");
+        const subjectRaw = String(r.get("subject") ?? "");
+        const expiresAtRaw = String(r.get("expiresAt") ?? "");
+
+        const confidenceRaw = r.get("confidence") as unknown;
+        const confidence =
+          typeof confidenceRaw === "number" && Number.isFinite(confidenceRaw)
+            ? confidenceRaw
+            : undefined;
+
+        return {
+          id: String(r.get("id") ?? ""),
+          namespace: String(r.get("namespace") ?? ""),
+          content: String(r.get("content") ?? ""),
+          createdAt: String(r.get("createdAt") ?? new Date().toISOString()),
+          kind: kindRaw || undefined,
+          memoryKey: memoryKeyRaw || undefined,
+          subject: subjectRaw || undefined,
+          expiresAt: expiresAtRaw || undefined,
+          confidence,
+          importance: Number(r.get("importance") ?? 0),
+          frequency: Number(r.get("frequency") ?? 0),
+          sessionId: sessionNodeId ? this.parseSessionIdFromNodeId(sessionNodeId) : undefined,
+          topics,
+          entities,
+        };
+      });
     } finally {
       await session.close();
     }
