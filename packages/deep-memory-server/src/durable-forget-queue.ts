@@ -2,9 +2,9 @@ import type { Logger } from "pino";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { DurableUpdateQueue } from "./durable-update-queue.js";
 import type { Neo4jStore } from "./neo4j.js";
 import type { QdrantStore } from "./qdrant.js";
-import type { DurableUpdateQueue } from "./durable-update-queue.js";
 
 type ForgetRequest = {
   namespace: string;
@@ -257,7 +257,7 @@ export class DurableForgetQueue {
 
   async listFailed(params: { limit: number }) {
     const names = await fs.readdir(this.failedDir).catch(() => []);
-    const sorted = names.toSorted();
+    const sorted = names.toSorted((a, b) => a.localeCompare(b));
     const out: Array<ReturnType<typeof sanitizeFailedTask>> = [];
     for (const name of sorted) {
       if (out.length >= Math.max(1, params.limit)) {
@@ -294,9 +294,14 @@ export class DurableForgetQueue {
     return { mode: "empty" as const };
   }
 
-  async retryFailed(params: { file: string }): Promise<{ status: "requeued" } | { status: "not_found" }> {
+  async retryFailed(params: {
+    file: string;
+  }): Promise<{ status: "requeued" } | { status: "not_found" }> {
     const from = path.join(this.failedDir, params.file);
-    const exists = await fs.stat(from).then(() => true).catch(() => false);
+    const exists = await fs
+      .stat(from)
+      .then(() => true)
+      .catch(() => false);
     if (!exists) {
       return { status: "not_found" };
     }
@@ -314,7 +319,7 @@ export class DurableForgetQueue {
     const names = await fs.readdir(this.failedDir).catch(() => []);
     let matched = 0;
     let retried = 0;
-    for (const name of names.toSorted()) {
+    for (const name of names.toSorted((a, b) => a.localeCompare(b))) {
       if (retried >= Math.max(1, params.limit)) {
         break;
       }
@@ -447,7 +452,9 @@ export class DurableForgetQueue {
     }
   }
 
-  private async processForget(task: PersistedForgetTask): Promise<NonNullable<PersistedForgetTask["result"]>> {
+  private async processForget(
+    task: PersistedForgetTask,
+  ): Promise<NonNullable<PersistedForgetTask["result"]>> {
     const out: NonNullable<PersistedForgetTask["result"]> = {
       qdrant: {},
       neo4j: {},
@@ -460,7 +467,10 @@ export class DurableForgetQueue {
         await this.qdrant.deleteBySession({ namespace: task.namespace, sessionId: task.sessionId });
         out.qdrant!.bySession = { ok: true };
       } catch (err) {
-        out.qdrant!.bySession = { ok: false, error: err instanceof Error ? err.message : String(err) };
+        out.qdrant!.bySession = {
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
       }
       try {
         const d = await this.neo4j.deleteMemoriesBySession({
@@ -470,7 +480,10 @@ export class DurableForgetQueue {
         out.deletedNeo4j = (out.deletedNeo4j ?? 0) + d;
         out.neo4j!.bySession = { ok: true, deleted: d };
       } catch (err) {
-        out.neo4j!.bySession = { ok: false, error: err instanceof Error ? err.message : String(err) };
+        out.neo4j!.bySession = {
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
       }
       try {
         const cancelled = await this.updateQueue.cancelBySession({
@@ -479,7 +492,11 @@ export class DurableForgetQueue {
         });
         out.queue = { ok: true, cancelled };
       } catch (err) {
-        out.queue = { ok: false, cancelled: 0, error: err instanceof Error ? err.message : String(err) };
+        out.queue = {
+          ok: false,
+          cancelled: 0,
+          error: err instanceof Error ? err.message : String(err),
+        };
       }
     }
 
@@ -503,4 +520,3 @@ export class DurableForgetQueue {
     return out;
   }
 }
-

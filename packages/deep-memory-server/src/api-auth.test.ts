@@ -37,14 +37,14 @@ describe("API auth", () => {
         exportFailed: async () => ({ mode: "empty" }),
         retryFailedByKey: async () => ({ status: "ok", matched: 0, retried: 0 }),
       } as unknown as DurableUpdateQueue,
-    forgetQueue: {
-      stats: () => ({ pendingApprox: 0, active: 0, inflightKeys: 0 }),
-      enqueue: async () => ({ status: "queued", key: "k", taskId: "t" }),
-      listFailed: async () => [],
-      exportFailed: async () => ({ mode: "empty" }),
-      retryFailed: async () => ({ status: "not_found" }),
-      retryFailedByKey: async () => ({ status: "ok", matched: 0, retried: 0 }),
-    } as unknown as DurableForgetQueue,
+      forgetQueue: {
+        stats: () => ({ pendingApprox: 0, active: 0, inflightKeys: 0 }),
+        enqueue: async () => ({ status: "queued", key: "k", taskId: "t" }),
+        listFailed: async () => [],
+        exportFailed: async () => ({ mode: "empty" }),
+        retryFailed: async () => ({ status: "not_found" }),
+        retryFailedByKey: async () => ({ status: "ok", matched: 0, retried: 0 }),
+      } as unknown as DurableForgetQueue,
     });
 
     const res = await app.request("/update_memory_index", {
@@ -83,14 +83,14 @@ describe("API auth", () => {
         exportFailed: async () => ({ mode: "empty" }),
         retryFailedByKey: async () => ({ status: "ok", matched: 0, retried: 0 }),
       } as unknown as DurableUpdateQueue,
-    forgetQueue: {
-      stats: () => ({ pendingApprox: 0, active: 0, inflightKeys: 0 }),
-      enqueue: async () => ({ status: "queued", key: "k", taskId: "t" }),
-      listFailed: async () => [],
-      exportFailed: async () => ({ mode: "empty" }),
-      retryFailed: async () => ({ status: "not_found" }),
-      retryFailedByKey: async () => ({ status: "ok", matched: 0, retried: 0 }),
-    } as unknown as DurableForgetQueue,
+      forgetQueue: {
+        stats: () => ({ pendingApprox: 0, active: 0, inflightKeys: 0 }),
+        enqueue: async () => ({ status: "queued", key: "k", taskId: "t" }),
+        listFailed: async () => [],
+        exportFailed: async () => ({ mode: "empty" }),
+        retryFailed: async () => ({ status: "not_found" }),
+        retryFailedByKey: async () => ({ status: "ok", matched: 0, retried: 0 }),
+      } as unknown as DurableForgetQueue,
     });
 
     const res = await app.request("/update_memory_index", {
@@ -129,14 +129,14 @@ describe("API auth", () => {
         exportFailed: async () => ({ mode: "empty" }),
         retryFailedByKey: async () => ({ status: "ok", matched: 0, retried: 0 }),
       } as unknown as DurableUpdateQueue,
-    forgetQueue: {
-      stats: () => ({ pendingApprox: 0, active: 0, inflightKeys: 0 }),
-      enqueue: async () => ({ status: "queued", key: "k", taskId: "t" }),
-      listFailed: async () => [],
-      exportFailed: async () => ({ mode: "empty" }),
-      retryFailed: async () => ({ status: "not_found" }),
-      retryFailedByKey: async () => ({ status: "ok", matched: 0, retried: 0 }),
-    } as unknown as DurableForgetQueue,
+      forgetQueue: {
+        stats: () => ({ pendingApprox: 0, active: 0, inflightKeys: 0 }),
+        enqueue: async () => ({ status: "queued", key: "k", taskId: "t" }),
+        listFailed: async () => [],
+        exportFailed: async () => ({ mode: "empty" }),
+        retryFailed: async () => ({ status: "not_found" }),
+        retryFailedByKey: async () => ({ status: "ok", matched: 0, retried: 0 }),
+      } as unknown as DurableForgetQueue,
     });
 
     const res = await app.request("/update_memory_index", {
@@ -179,14 +179,14 @@ describe("API auth", () => {
         retryFailed: async () => ({ status: "not_found" }),
         retryFailedByKey: async () => ({ status: "ok", matched: 0, retried: 0 }),
       } as unknown as DurableUpdateQueue,
-    forgetQueue: {
-      stats: () => ({ pendingApprox: 0, active: 0, inflightKeys: 0 }),
-      enqueue: async () => ({ status: "queued", key: "k", taskId: "t" }),
-      listFailed: async () => [],
-      exportFailed: async () => ({ mode: "empty" }),
-      retryFailed: async () => ({ status: "not_found" }),
-      retryFailedByKey: async () => ({ status: "ok", matched: 0, retried: 0 }),
-    } as unknown as DurableForgetQueue,
+      forgetQueue: {
+        stats: () => ({ pendingApprox: 0, active: 0, inflightKeys: 0 }),
+        enqueue: async () => ({ status: "queued", key: "k", taskId: "t" }),
+        listFailed: async () => [],
+        exportFailed: async () => ({ mode: "empty" }),
+        retryFailed: async () => ({ status: "not_found" }),
+        retryFailedByKey: async () => ({ status: "ok", matched: 0, retried: 0 }),
+      } as unknown as DurableForgetQueue,
     });
 
     // read key cannot update
