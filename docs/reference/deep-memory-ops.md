@@ -149,6 +149,24 @@ docker compose --profile deep-memory-prod up -d
 - a small sample `/retrieve_context` works for a known namespace
 - queue stats look sane (`/health`)
 
+## Disaster recovery drills (recommended)
+
+Run these drills periodically (for example, monthly) so you can restore quickly under stress.
+
+### Drill A: backup → restore → verify (tabletop + hands-on)
+
+1. Pick a **non-production** environment (or a staging clone).
+2. Take fresh tar backups of all three volumes:
+   - `neo4j_data`, `qdrant_data`, `deepmem_data`
+3. Restore into a clean environment using the restore procedure above.
+4. Verify:
+   - `GET /readyz` returns 200
+   - `GET /health/details` shows schema checks are ok
+   - `GET /health` shows queue stats are sane
+   - `POST /retrieve_context` returns 200 for a known namespace
+   - `POST /update_memory_index` returns 200 (queued or processed)
+   - If you use async forget: `GET /queue/forget/stats` returns 200 (admin key)
+
 ## Upgrade checklist (deep-memory-server)
 
 When updating deep-memory-server versions:
@@ -213,6 +231,19 @@ Notes:
 
 - The reindex job reads `Memory` nodes from Neo4j and writes points to the target Qdrant collection.
 - It does **not** delete the old collection. Switch `QDRANT_COLLECTION` after you validate the new one.
+
+### Rollback: Qdrant collection migration
+
+If a new collection shows degraded recall quality or performance:
+
+1. Switch deep-memory-server back to the previous `QDRANT_COLLECTION` value.
+2. Restart deep-memory-server.
+3. Verify:
+   - `GET /readyz` returns 200
+   - `GET /health/details` shows Qdrant schema ok for the reverted collection
+   - Run `pnpm --dir packages/deep-memory-server eval` (or your real regression suite)
+
+Keep old collections until you have validated the new one for a full period (at least a few days).
 
 ## Key rotation (API_KEYS_JSON)
 
