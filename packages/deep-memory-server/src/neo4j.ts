@@ -14,6 +14,16 @@ export class Neo4jStore {
     await this.driver.close();
   }
 
+  async healthCheck(): Promise<{ ok: true } | { ok: false; error: string }> {
+    try {
+      // verifyConnectivity is the lightest built-in probe.
+      await this.driver.verifyConnectivity();
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   async ensureSchema(): Promise<void> {
     const session = this.driver.session();
     try {

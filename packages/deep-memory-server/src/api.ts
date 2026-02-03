@@ -56,6 +56,27 @@ export function createApi(params: {
   const app = new Hono();
   const authz = createAuthz(params.cfg);
 
+  const withTimeout = async <T>(
+    name: string,
+    ms: number,
+    fn: () => Promise<T>,
+  ): Promise<{ ok: true; value: T } | { ok: false; error: string }> => {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const value = await new Promise<T>((resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${name} timeout after ${ms}ms`)), ms);
+        fn().then(resolve, reject);
+      });
+      return { ok: true, value };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  };
+
   app.use("*", enforceBodySize(params.cfg));
   // Permission matrix:
   // - retrieve_context: read
@@ -98,7 +119,37 @@ export function createApi(params: {
     }
   });
 
-  app.get("/health", (c) => c.json({ ok: true }));
+  app.get("/health", (c) =>
+    c.json({
+      ok: true,
+      auth: {
+        required: authz.required,
+      },
+      queue: params.queue.stats(),
+    }),
+  );
+
+  // Readiness probe: verifies dependencies are reachable within a tight timeout.
+  app.get("/readyz", async (c) => {
+    const timeoutMs = 1500;
+    const qdrant = await withTimeout("qdrant", timeoutMs, async () => params.qdrant.healthCheck());
+    const neo4j = await withTimeout("neo4j", timeoutMs, async () => params.neo4j.healthCheck());
+    const queue = params.queue.stats();
+
+    const qdrantResult = qdrant.ok ? qdrant.value : { ok: false as const, error: qdrant.error };
+    const neo4jResult = neo4j.ok ? neo4j.value : { ok: false as const, error: neo4j.error };
+    const ok = qdrantResult.ok && neo4jResult.ok;
+
+    return c.json(
+      {
+        ok,
+        qdrant: qdrantResult,
+        neo4j: neo4jResult,
+        queue,
+      },
+      ok ? 200 : 503,
+    );
+  });
 
   app.post("/retrieve_context", async (c) => {
     const body = await readJsonWithLimit<Record<string, unknown>>(c, {

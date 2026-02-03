@@ -45,6 +45,15 @@ export class QdrantStore {
     });
   }
 
+  async healthCheck(): Promise<{ ok: true } | { ok: false; error: string }> {
+    try {
+      await this.client.getCollections();
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   async upsertMemory(params: {
     id: string;
     vector: number[];
