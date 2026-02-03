@@ -28,11 +28,15 @@ const EnvSchema = z.object({
   RATE_LIMIT_QUEUE_ADMIN_PER_WINDOW: z.coerce.number().int().nonnegative().default(0),
   UPDATE_BACKLOG_REJECT_PENDING: z.coerce.number().int().nonnegative().default(0),
   UPDATE_BACKLOG_RETRY_AFTER_SECONDS: z.coerce.number().int().positive().default(30),
+  UPDATE_BACKLOG_DELAY_PENDING: z.coerce.number().int().nonnegative().default(0),
+  UPDATE_BACKLOG_DELAY_SECONDS: z.coerce.number().int().nonnegative().default(0),
+  UPDATE_BACKLOG_READ_ONLY_PENDING: z.coerce.number().int().nonnegative().default(0),
   UPDATE_DISABLED_NAMESPACES: z.string().optional(),
   UPDATE_MIN_INTERVAL_MS: z.coerce.number().int().nonnegative().default(0),
   UPDATE_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(1),
   NAMESPACE_RETRIEVE_CONCURRENCY: z.coerce.number().int().nonnegative().default(0),
   NAMESPACE_UPDATE_CONCURRENCY: z.coerce.number().int().nonnegative().default(0),
+  RETRIEVE_DEGRADE_RELATED_PENDING: z.coerce.number().int().nonnegative().default(0),
   MIGRATIONS_MODE: z
     .enum(["off", "validate", "apply"])
     .default("apply") satisfies z.ZodType<MigrationMode>,

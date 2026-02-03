@@ -289,6 +289,9 @@ export function createApi(params: {
         updateBacklog: {
           rejectPending: params.cfg.UPDATE_BACKLOG_REJECT_PENDING,
           retryAfterSeconds: params.cfg.UPDATE_BACKLOG_RETRY_AFTER_SECONDS,
+          delayPending: params.cfg.UPDATE_BACKLOG_DELAY_PENDING,
+          delaySeconds: params.cfg.UPDATE_BACKLOG_DELAY_SECONDS,
+          readOnlyPending: params.cfg.UPDATE_BACKLOG_READ_ONLY_PENDING,
         },
         updateIngest: {
           disabledNamespaces: Array.from(updateDisabledNamespaces.values()),
@@ -298,6 +301,9 @@ export function createApi(params: {
         namespaceConcurrency: {
           retrieve: params.cfg.NAMESPACE_RETRIEVE_CONCURRENCY,
           update: params.cfg.NAMESPACE_UPDATE_CONCURRENCY,
+        },
+        retrieveDegrade: {
+          relatedPending: params.cfg.RETRIEVE_DEGRADE_RELATED_PENDING,
         },
         sensitiveFilter: {
           enabled: params.cfg.SENSITIVE_FILTER_ENABLED,
@@ -405,7 +411,12 @@ export function createApi(params: {
       activeRetrieveByNamespace.set(namespace, active + 1);
     }
     const maxMemories = req.max_memories ?? 10;
-    const hints = extractHintsFromText(req.user_input);
+    const degradeRelatedPending = params.cfg.RETRIEVE_DEGRADE_RELATED_PENDING;
+    const pendingApprox = params.queue.stats().pendingApprox;
+    const degradeRelated = degradeRelatedPending > 0 && pendingApprox >= degradeRelatedPending;
+    const hints = degradeRelated
+      ? { entities: [] as string[], topics: [] as string[] }
+      : extractHintsFromText(req.user_input);
     try {
       const out: RetrieveContextResponse = await params.retriever.retrieve({
         namespace,
@@ -499,9 +510,22 @@ export function createApi(params: {
     const runAsync = req.async ?? true;
 
     if (runAsync) {
+      const stats = params.queue.stats();
+      const readOnlyPending = params.cfg.UPDATE_BACKLOG_READ_ONLY_PENDING;
+      if (readOnlyPending > 0 && stats.pendingApprox >= readOnlyPending) {
+        const retryAfter = params.cfg.UPDATE_BACKLOG_RETRY_AFTER_SECONDS;
+        c.header("retry-after", String(retryAfter));
+        return c.json({
+          status: "skipped",
+          memories_added: 0,
+          memories_filtered: 0,
+          error: "degraded_read_only",
+          pendingApprox: stats.pendingApprox,
+          retryAfterSeconds: retryAfter,
+        });
+      }
       const rejectPending = params.cfg.UPDATE_BACKLOG_REJECT_PENDING;
       if (rejectPending > 0) {
-        const stats = params.queue.stats();
         if (stats.pendingApprox >= rejectPending) {
           const retryAfter = params.cfg.UPDATE_BACKLOG_RETRY_AFTER_SECONDS;
           c.header("retry-after", String(retryAfter));
@@ -515,12 +539,30 @@ export function createApi(params: {
           );
         }
       }
-      void params.queue.enqueue({ namespace, sessionId: req.session_id, messages: req.messages });
+      const delayPending = params.cfg.UPDATE_BACKLOG_DELAY_PENDING;
+      const delaySeconds = params.cfg.UPDATE_BACKLOG_DELAY_SECONDS;
+      const notBeforeMs =
+        delayPending > 0 && delaySeconds > 0 && stats.pendingApprox >= delayPending
+          ? Date.now() + delaySeconds * 1000
+          : undefined;
+      void params.queue.enqueue({
+        namespace,
+        sessionId: req.session_id,
+        messages: req.messages,
+        notBeforeMs,
+      });
       const resp: UpdateMemoryIndexResponse = {
         status: "queued",
         memories_added: 0,
         memories_filtered: 0,
       };
+      if (notBeforeMs) {
+        (resp as unknown as Record<string, unknown>).degraded = {
+          mode: "delayed",
+          notBeforeMs,
+          delaySeconds,
+        };
+      }
       return c.json(resp);
     }
 

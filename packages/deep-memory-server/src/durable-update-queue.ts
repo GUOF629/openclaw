@@ -10,6 +10,7 @@ type UpdateRequest = {
   namespace: string;
   sessionId: string;
   messages: unknown[];
+  notBeforeMs?: number;
 };
 
 type PersistedUpdateTask = {
@@ -439,7 +440,7 @@ export class DurableUpdateQueue {
       messageCount: count,
       createdAt: now.toISOString(),
       attempt: 0,
-      nextRunAt: Date.now(),
+      nextRunAt: Math.max(Date.now(), Number(req.notBeforeMs ?? Date.now()) || Date.now()),
       messages_gzip_base64: encoded.b64,
     };
 
