@@ -474,10 +474,16 @@ export async function runCronIsolatedAgentTurn(params: {
       return { status: "ok", summary, outputText };
     }
     try {
+      // `resolveCronDeliveryFailure()` already checks this, but TypeScript can't
+      // narrow `resolvedDelivery.to` from that helper.
+      const to = resolvedDelivery.to;
+      if (!to) {
+        throw new Error("cron delivery target is missing");
+      }
       await deliverOutboundPayloads({
         cfg: cfgWithAgentDefaults,
         channel: resolvedDelivery.channel,
-        to: resolvedDelivery.to,
+        to,
         accountId: resolvedDelivery.accountId,
         threadId: resolvedDelivery.threadId,
         payloads,
