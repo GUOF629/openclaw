@@ -25,6 +25,9 @@ const FileIngestSchema = Type.Object({
   sessionId: Type.Optional(Type.String()),
   source: Type.Optional(Type.String()),
   mime: Type.Optional(Type.String()),
+  kind: Type.Optional(Type.String()),
+  tags: Type.Optional(Type.Array(Type.String())),
+  hint: Type.Optional(Type.String()),
 });
 
 function buildClient(cfg: OpenClawConfig, agentId: string): RustFsClient | null {
@@ -143,6 +146,16 @@ export function createFileIngestTool(options: {
         });
         const source = readStringParam(params, "source", { required: false, label: "source" });
         const mime = readStringParam(params, "mime", { required: false, label: "mime" });
+        const kind = readStringParam(params, "kind", { required: false, label: "kind" });
+        const hint = readStringParam(params, "hint", { required: false, label: "hint" });
+        const tagsRaw = (params as Record<string, unknown>).tags;
+        const tags = Array.isArray(tagsRaw)
+          ? tagsRaw
+              .filter((t): t is string => typeof t === "string")
+              .map((t) => t.trim())
+              .filter((t) => t.length > 0)
+              .slice(0, 50)
+          : undefined;
 
         const absPath = path.isAbsolute(rel) ? path.resolve(rel) : path.resolve(workspaceDir, rel);
         const relToWorkspace = path.relative(workspaceDir, absPath).replace(/\\/g, "/");
@@ -165,6 +178,22 @@ export function createFileIngestTool(options: {
           source: source ?? undefined,
           mime: mime ?? undefined,
         });
+        if (out.ok && (kind || hint || (tags && tags.length > 0))) {
+          await client.upsertAnnotations({
+            fileId: out.file_id,
+            source: "openclaw",
+            annotations: {
+              openclaw_ingest: {
+                kind: kind ?? undefined,
+                hint: hint ?? undefined,
+                tags: tags && tags.length > 0 ? tags : undefined,
+                session_id: sessionId ?? undefined,
+                source: source ?? undefined,
+                mime: mime ?? undefined,
+              },
+            },
+          });
+        }
         return jsonResult(out);
       } catch (err) {
         return jsonResult({ ok: false, error: err instanceof Error ? err.message : String(err) });

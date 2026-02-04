@@ -14,6 +14,11 @@ export type RustFsFileMeta = {
   created_at_ms: number;
   source?: string;
   encrypted: boolean;
+  extract_status?: string;
+  extract_updated_at_ms?: number;
+  extract_attempt?: number;
+  extract_error?: string;
+  annotations?: unknown;
 };
 
 export type RustFsSearchResponse =
@@ -26,6 +31,10 @@ export type RustFsIngestResponse =
 
 export type RustFsLinkResponse =
   | { ok: true; token: string; path: string; url?: string; expires_at_ms: number }
+  | { ok: false; error: string };
+
+export type RustFsAnnotationsResponse =
+  | { ok: true; file_id: string; updated_at_ms: number }
   | { ok: false; error: string };
 
 export class RustFsClient {
@@ -206,6 +215,45 @@ export class RustFsClient {
         return { ok: false, error: "unexpected response" };
       }
       return json as unknown as RustFsIngestResponse;
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  async upsertAnnotations(params: {
+    fileId: string;
+    // Opaque: semantics are LLM/worker-defined.
+    annotations: unknown;
+    source?: string;
+  }): Promise<RustFsAnnotationsResponse> {
+    const fileId = params.fileId.trim();
+    if (!fileId) {
+      return { ok: false, error: "fileId required" };
+    }
+    try {
+      const res = await fetch(
+        `${this.baseUrl}/v1/files/${encodeURIComponent(fileId)}/annotations`,
+        {
+          method: "POST",
+          headers: this.headers({ "content-type": "application/json" }),
+          body: JSON.stringify({
+            annotations: params.annotations ?? {},
+            source: params.source?.trim() || "openclaw",
+          }),
+        },
+      );
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        return {
+          ok: false,
+          error: `HTTP ${res.status} ${res.statusText}${text ? `: ${text}` : ""}`,
+        };
+      }
+      const json = (await res.json()) as Record<string, unknown>;
+      if (json.ok !== true) {
+        return { ok: false, error: "unexpected response" };
+      }
+      return json as unknown as RustFsAnnotationsResponse;
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
