@@ -463,6 +463,18 @@ export const DeepMemorySchema = z
   })
   .strict()
   .optional();
+
+export const RustFsSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    project: z.string().optional(),
+    apiKey: z.string().optional(),
+    baseUrl: z.string().optional(),
+    linkTtlSeconds: z.number().int().positive().optional(),
+    maxUploadBytes: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
 export const AgentModelSchema = z.union([
   z.string(),
   z
@@ -483,6 +495,7 @@ export const AgentEntrySchema = z
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     deepMemory: DeepMemorySchema,
+    rustfs: RustFsSchema,
     humanDelay: HumanDelaySchema.optional(),
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,

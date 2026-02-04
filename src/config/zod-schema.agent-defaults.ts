@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   HeartbeatSchema,
   DeepMemorySchema,
+  RustFsSchema,
   MemorySearchSchema,
   SandboxBrowserSchema,
   SandboxDockerSchema,
@@ -55,6 +56,7 @@ export const AgentDefaultsSchema = z
     cliBackends: z.record(z.string(), CliBackendSchema).optional(),
     memorySearch: MemorySearchSchema,
     deepMemory: DeepMemorySchema,
+    rustfs: RustFsSchema,
     contextPruning: z
       .object({
         mode: z.union([z.literal("off"), z.literal("cache-ttl")]).optional(),

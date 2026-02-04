@@ -7,6 +7,11 @@ import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import { createCronTool } from "./tools/cron-tool.js";
+import {
+  createFileIngestTool,
+  createFileSearchTool,
+  createFileSendTool,
+} from "./tools/file-tools.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
@@ -88,6 +93,19 @@ export function createOpenClawTools(options?: {
         sandboxRoot: options?.sandboxRoot,
         requireExplicitTarget: options?.requireExplicitMessageTarget,
       });
+  const fileSearchTool = createFileSearchTool({
+    config: options?.config,
+    agentSessionKey: options?.agentSessionKey,
+  });
+  const fileSendTool = createFileSendTool({
+    config: options?.config,
+    agentSessionKey: options?.agentSessionKey,
+  });
+  const fileIngestTool = createFileIngestTool({
+    config: options?.config,
+    agentSessionKey: options?.agentSessionKey,
+    workspaceDir: options?.workspaceDir,
+  });
   const tools: AnyAgentTool[] = [
     createBrowserTool({
       sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
@@ -143,6 +161,9 @@ export function createOpenClawTools(options?: {
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
     }),
+    ...(fileSearchTool ? [fileSearchTool] : []),
+    ...(fileSendTool ? [fileSendTool] : []),
+    ...(fileIngestTool ? [fileIngestTool] : []),
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),

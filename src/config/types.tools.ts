@@ -387,6 +387,31 @@ export type DeepMemoryConfig = {
   };
 };
 
+/**
+ * RustFS configuration (optional).
+ *
+ * RustFS is a session file archive service (durable storage + basic metadata search).
+ * It is intentionally separate from deep-memory-server.
+ */
+export type RustFsConfig = {
+  /** Enable RustFS integration (default: false). */
+  enabled?: boolean;
+  /**
+   * Tenant/project label for file isolation.
+   *
+   * In practice this can be a product name or project name; it maps to RustFS tenant_id.
+   */
+  project?: string;
+  /** Shared secret for RustFS (sent as x-api-key). */
+  apiKey?: string;
+  /** Base URL for RustFS (e.g. http://127.0.0.1:8099). */
+  baseUrl?: string;
+  /** Default TTL seconds for public share links (default: 300). */
+  linkTtlSeconds?: number;
+  /** Hard cap for uploads (bytes). Default is best-effort; RustFS also enforces its own limits. */
+  maxUploadBytes?: number;
+};
+
 export type ToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
