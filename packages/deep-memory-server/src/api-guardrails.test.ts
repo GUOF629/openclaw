@@ -155,6 +155,26 @@ describe("API guardrails", () => {
     expect(r.headers.get("retry-after")).toBe("7");
   });
 
+  it("returns 503 degraded_read_only when in read-only mode", async () => {
+    const cfg = {
+      ...cfgBase,
+      API_KEYS_JSON: JSON.stringify([{ key: "writeKey", role: "write", namespaces: ["ns1"] }]),
+      RATE_LIMIT_UPDATE_PER_WINDOW: 0,
+      UPDATE_BACKLOG_READ_ONLY_PENDING: 1,
+    } as DeepMemoryServerConfig;
+    const { app } = createStubApi(cfg, {
+      stats: () => ({ pendingApprox: 1, active: 0, inflightKeys: 0 }),
+    });
+    const r = await app.request("/update_memory_index", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": "writeKey" },
+      body: JSON.stringify({ namespace: "ns1", session_id: "s1", messages: [], async: true }),
+    });
+    expect(r.status).toBe(503);
+    const json = (await r.json()) as Record<string, unknown>;
+    expect(json.error).toBe("degraded_read_only");
+  });
+
   it("skips updates for disabled namespaces", async () => {
     const cfg = {
       ...cfgBase,

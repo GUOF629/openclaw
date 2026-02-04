@@ -408,7 +408,13 @@ export function createApi(params: {
       if (active >= nsRetrieveLimit) {
         c.header("retry-after", "1");
         return c.json(
-          { error: "namespace_overloaded", namespace, active, limit: nsRetrieveLimit },
+          {
+            error: "namespace_overloaded",
+            namespace,
+            active,
+            limit: nsRetrieveLimit,
+            retryAfterSeconds: 1,
+          },
           503,
         );
       }
@@ -519,14 +525,14 @@ export function createApi(params: {
       if (readOnlyPending > 0 && stats.pendingApprox >= readOnlyPending) {
         const retryAfter = params.cfg.UPDATE_BACKLOG_RETRY_AFTER_SECONDS;
         c.header("retry-after", String(retryAfter));
-        return c.json({
-          status: "skipped",
-          memories_added: 0,
-          memories_filtered: 0,
-          error: "degraded_read_only",
-          pendingApprox: stats.pendingApprox,
-          retryAfterSeconds: retryAfter,
-        });
+        return c.json(
+          {
+            error: "degraded_read_only",
+            pendingApprox: stats.pendingApprox,
+            retryAfterSeconds: retryAfter,
+          },
+          503,
+        );
       }
       const rejectPending = params.cfg.UPDATE_BACKLOG_REJECT_PENDING;
       if (rejectPending > 0) {
