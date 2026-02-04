@@ -19,6 +19,8 @@ It assumes you are using the repo root `docker-compose.yml` profiles:
 - `deep-memory-prod`: built image + persistent `deepmem_data` volume
 - `deep-memory`: dev-friendly profile (not recommended for production)
 
+For configuration and API contract details, see [Deep memory server reference](/reference/deep-memory-server).
+
 ## Quick health checks
 
 From the host running the services:
