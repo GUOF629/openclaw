@@ -16,7 +16,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use bytes::Bytes;
+use hmac::{Hmac, Mac};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -35,6 +38,8 @@ struct AppState {
     require_api_key: bool,
     api_keys: Arc<HashMap<String, ApiKey>>,
     master_key: Option<SecretString>,
+    signing_key: Option<Vec<u8>>,
+    public_base_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -44,6 +49,13 @@ struct ApiKey {
     tenant_id: String,
     #[allow(dead_code)]
     role: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct AuthContext {
+    tenant_id: String,
+    role: String,
+    key_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -91,10 +103,26 @@ struct IngestResponse {
     encrypted: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct LinkRequest {
+    ttl_seconds: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct LinkResponse {
+    ok: bool,
+    token: String,
+    path: String,
+    url: Option<String>,
+    expires_at_ms: i64,
+}
+
 #[derive(Error, Debug)]
 enum AppError {
     #[error("unauthorized")]
     Unauthorized,
+    #[error("forbidden")]
+    Forbidden,
     #[error("invalid_request: {0}")]
     InvalidRequest(String),
     #[error("not_found")]
@@ -114,6 +142,13 @@ impl IntoResponse for AppError {
                 StatusCode::UNAUTHORIZED,
                 ErrorBody {
                     error: "unauthorized",
+                    message: None,
+                },
+            ),
+            AppError::Forbidden => (
+                StatusCode::FORBIDDEN,
+                ErrorBody {
+                    error: "forbidden",
                     message: None,
                 },
             ),
@@ -150,15 +185,42 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
-fn tenant_from_auth(state: &AppState, headers: &HeaderMap, tenant_hint: Option<&str>) -> Result<String, AppError> {
+fn normalize_role(role: Option<&str>) -> String {
+    let r = role.unwrap_or("admin").trim().to_lowercase();
+    match r.as_str() {
+        "reader" | "writer" | "admin" => r,
+        _ => "admin".to_string(),
+    }
+}
+
+fn key_id_from_raw(raw_key: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(raw_key.as_bytes());
+    let digest = hasher.finalize();
+    hex::encode(&digest[..8])
+}
+
+fn auth_from_headers(
+    state: &AppState,
+    headers: &HeaderMap,
+    tenant_hint: Option<&str>,
+) -> Result<AuthContext, AppError> {
     if !state.require_api_key {
         if let Some(t) = tenant_hint {
             let trimmed = t.trim();
             if !trimmed.is_empty() {
-                return Ok(trimmed.to_string());
+                return Ok(AuthContext {
+                    tenant_id: trimmed.to_string(),
+                    role: "admin".to_string(),
+                    key_id: "dev".to_string(),
+                });
             }
         }
-        return Ok("default".to_string());
+        return Ok(AuthContext {
+            tenant_id: "default".to_string(),
+            role: "admin".to_string(),
+            key_id: "dev".to_string(),
+        });
     }
     let key = headers
         .get("x-api-key")
@@ -167,7 +229,11 @@ fn tenant_from_auth(state: &AppState, headers: &HeaderMap, tenant_hint: Option<&
         .filter(|s| !s.is_empty())
         .ok_or(AppError::Unauthorized)?;
     let entry = state.api_keys.get(&key).ok_or(AppError::Unauthorized)?;
-    Ok(entry.tenant_id.clone())
+    Ok(AuthContext {
+        tenant_id: entry.tenant_id.clone(),
+        role: normalize_role(entry.role.as_deref()),
+        key_id: key_id_from_raw(&key),
+    })
 }
 
 async fn init_db(db_path: &Path) -> Result<(), AppError> {
@@ -222,6 +288,20 @@ async fn health() -> impl IntoResponse {
 async fn readyz(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
     init_db(&state.db_path).await?;
     Ok((StatusCode::OK, Json(serde_json::json!({ "ok": true }))))
+}
+
+fn assert_can_read(auth: &AuthContext) -> Result<(), AppError> {
+    match auth.role.as_str() {
+        "reader" | "writer" | "admin" => Ok(()),
+        _ => Err(AppError::Forbidden),
+    }
+}
+
+fn assert_can_write(auth: &AuthContext) -> Result<(), AppError> {
+    match auth.role.as_str() {
+        "writer" | "admin" => Ok(()),
+        _ => Err(AppError::Forbidden),
+    }
 }
 
 async fn ingest(
@@ -306,7 +386,9 @@ async fn ingest(
         }
     }
 
-    let tenant_id = tenant_from_auth(&state, &headers, tenant_hint.as_deref())?;
+    let auth = auth_from_headers(&state, &headers, tenant_hint.as_deref())?;
+    assert_can_write(&auth)?;
+    let tenant_id = auth.tenant_id;
     let tmp = tmp_path.ok_or_else(|| AppError::InvalidRequest("missing multipart field: file".to_string()))?;
     let filename = filename.unwrap_or_else(|| "file".to_string());
     let sha256 = hex::encode(sha.finalize());
@@ -446,7 +528,9 @@ async fn search(
     headers: HeaderMap,
     Query(q): Query<SearchQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let tenant_id = tenant_from_auth(&state, &headers, q.tenant_id.as_deref())?;
+    let auth = auth_from_headers(&state, &headers, q.tenant_id.as_deref())?;
+    assert_can_read(&auth)?;
+    let tenant_id = auth.tenant_id;
     let limit = q.limit.unwrap_or(50).clamp(1, 200) as i64;
     let session_id = q.session_id.clone().filter(|s| !s.trim().is_empty());
     let query_text = q.q.clone().filter(|s| !s.trim().is_empty());
@@ -517,7 +601,9 @@ async fn meta(
     headers: HeaderMap,
     axum::extract::Path(path): axum::extract::Path<PathParams>,
 ) -> Result<impl IntoResponse, AppError> {
-    let tenant_id = tenant_from_auth(&state, &headers, None)?;
+    let auth = auth_from_headers(&state, &headers, None)?;
+    assert_can_read(&auth)?;
+    let tenant_id = auth.tenant_id;
     let file_id = path.file_id.trim().to_string();
     if file_id.is_empty() {
         return Err(AppError::InvalidRequest("file_id required".to_string()));
@@ -564,7 +650,9 @@ async fn download(
     headers: HeaderMap,
     axum::extract::Path(path): axum::extract::Path<PathParams>,
 ) -> Result<impl IntoResponse, AppError> {
-    let tenant_id = tenant_from_auth(&state, &headers, None)?;
+    let auth = auth_from_headers(&state, &headers, None)?;
+    assert_can_read(&auth)?;
+    let tenant_id = auth.tenant_id;
     let file_id = path.file_id.trim().to_string();
     if file_id.is_empty() {
         return Err(AppError::InvalidRequest("file_id required".to_string()));
@@ -663,6 +751,228 @@ async fn download(
     Ok((StatusCode::OK, headers_out, body))
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct DownloadTokenPayload {
+    tenant_id: String,
+    file_id: String,
+    exp_ms: i64,
+}
+
+type HmacSha256 = Hmac<Sha256>;
+
+fn sign_token(signing_key: &[u8], payload: &DownloadTokenPayload) -> Result<String, AppError> {
+    let payload_json =
+        serde_json::to_vec(payload).map_err(|e| AppError::InvalidRequest(e.to_string()))?;
+    let payload_b64 = URL_SAFE_NO_PAD.encode(payload_json);
+    let mut mac = HmacSha256::new_from_slice(signing_key)
+        .map_err(|_| AppError::InvalidRequest("invalid signing key".to_string()))?;
+    mac.update(payload_b64.as_bytes());
+    let sig = mac.finalize().into_bytes();
+    let sig_b64 = URL_SAFE_NO_PAD.encode(sig);
+    Ok(format!("{payload_b64}.{sig_b64}"))
+}
+
+fn verify_token(signing_key: &[u8], token: &str) -> Result<DownloadTokenPayload, AppError> {
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 2 {
+        return Err(AppError::InvalidRequest("invalid token".to_string()));
+    }
+    let payload_b64 = parts[0];
+    let sig_b64 = parts[1];
+
+    let sig = URL_SAFE_NO_PAD
+        .decode(sig_b64.as_bytes())
+        .map_err(|_| AppError::InvalidRequest("invalid token".to_string()))?;
+
+    let mut mac = HmacSha256::new_from_slice(signing_key)
+        .map_err(|_| AppError::InvalidRequest("invalid signing key".to_string()))?;
+    mac.update(payload_b64.as_bytes());
+    mac.verify_slice(&sig)
+        .map_err(|_| AppError::Unauthorized)?;
+
+    let payload_json = URL_SAFE_NO_PAD
+        .decode(payload_b64.as_bytes())
+        .map_err(|_| AppError::InvalidRequest("invalid token".to_string()))?;
+    let payload: DownloadTokenPayload = serde_json::from_slice(&payload_json)
+        .map_err(|_| AppError::InvalidRequest("invalid token".to_string()))?;
+    if payload.exp_ms <= now_ms() {
+        return Err(AppError::Unauthorized);
+    }
+    Ok(payload)
+}
+
+#[derive(Debug, Deserialize)]
+struct PublicDownloadQuery {
+    token: String,
+}
+
+async fn create_link(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(path): axum::extract::Path<PathParams>,
+    Json(req): Json<LinkRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let auth = auth_from_headers(&state, &headers, None)?;
+    assert_can_write(&auth)?;
+
+    let signing_key = state.signing_key.as_deref().ok_or_else(|| {
+        AppError::InvalidRequest("RUSTFS_SIGNING_KEY is not configured".to_string())
+    })?;
+
+    let file_id = path.file_id.trim().to_string();
+    if file_id.is_empty() {
+        return Err(AppError::InvalidRequest("file_id required".to_string()));
+    }
+
+    // Ensure file exists for this tenant (avoid token generation for missing / wrong tenant)
+    let tenant_id_db = auth.tenant_id.clone();
+    let file_id_db = file_id.clone();
+    let exists = with_conn(&state, move |conn| -> Result<bool, AppError> {
+        let mut stmt = conn
+            .prepare("SELECT COUNT(*) FROM files WHERE tenant_id=?1 AND file_id=?2")
+            .map_err(|e| AppError::Db(e.to_string()))?;
+        let count: i64 = stmt
+            .query_row(params![tenant_id_db, file_id_db], |row| row.get(0))
+            .map_err(|e| AppError::Db(e.to_string()))?;
+        Ok(count > 0)
+    })
+    .await?;
+    if !exists {
+        return Err(AppError::NotFound);
+    }
+
+    let ttl = req.ttl_seconds.unwrap_or(300).clamp(30, 3600) as i64;
+    let expires_at_ms = now_ms() + ttl * 1000;
+    let payload = DownloadTokenPayload {
+        tenant_id: auth.tenant_id.clone(),
+        file_id: file_id.clone(),
+        exp_ms: expires_at_ms,
+    };
+    let token = sign_token(signing_key, &payload)?;
+    let path = format!("/v1/public/download?token={}", token);
+    let url = state.public_base_url.as_deref().map(|base| {
+        let b = base.trim_end_matches('/');
+        format!("{b}{path}")
+    });
+    Ok((
+        StatusCode::OK,
+        Json(LinkResponse {
+            ok: true,
+            token,
+            path,
+            url,
+            expires_at_ms,
+        }),
+    ))
+}
+
+async fn public_download(
+    State(state): State<AppState>,
+    Query(q): Query<PublicDownloadQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let signing_key = state.signing_key.as_deref().ok_or_else(|| {
+        AppError::InvalidRequest("RUSTFS_SIGNING_KEY is not configured".to_string())
+    })?;
+    let payload = verify_token(signing_key, q.token.trim())?;
+
+    // Reuse existing download logic by querying metadata and streaming file.
+    // This endpoint bypasses API key auth but is constrained by the signed token.
+    let tenant_id = payload.tenant_id;
+    let file_id = payload.file_id;
+
+    #[derive(Debug)]
+    struct Row {
+        filename: String,
+        mime: Option<String>,
+        encrypted: bool,
+        storage_path: String,
+    }
+
+    let tenant_id_db = tenant_id.clone();
+    let file_id_db = file_id.clone();
+    let row = with_conn(&state, move |conn| -> Result<Option<Row>, AppError> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT filename, mime, encrypted, storage_path FROM files WHERE tenant_id=?1 AND file_id=?2",
+            )
+            .map_err(|e| AppError::Db(e.to_string()))?;
+        let mut rows = stmt
+            .query(params![tenant_id_db, file_id_db])
+            .map_err(|e| AppError::Db(e.to_string()))?;
+        if let Some(row) = rows.next().map_err(|e| AppError::Db(e.to_string()))? {
+            let encrypted_i: i64 = row.get(2).map_err(|e| AppError::Db(e.to_string()))?;
+            return Ok(Some(Row {
+                filename: row.get(0).map_err(|e| AppError::Db(e.to_string()))?,
+                mime: row.get(1).map_err(|e| AppError::Db(e.to_string()))?,
+                encrypted: encrypted_i != 0,
+                storage_path: row.get(3).map_err(|e| AppError::Db(e.to_string()))?,
+            }));
+        }
+        Ok(None)
+    })
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let abs = state.data_dir.join(row.storage_path.trim_start_matches('/'));
+    if !abs.exists() {
+        return Err(AppError::NotFound);
+    }
+
+    let mut headers_out = HeaderMap::new();
+    headers_out.insert(
+        header::CONTENT_DISPOSITION,
+        format!("attachment; filename=\"{}\"", row.filename.replace('"', "_"))
+            .parse()
+            .unwrap(),
+    );
+    if let Some(ct) = row.mime.as_deref() {
+        if let Ok(v) = ct.parse() {
+            headers_out.insert(header::CONTENT_TYPE, v);
+        }
+    }
+
+    if !row.encrypted {
+        let file = fs::File::open(abs).await?;
+        let body = Body::from_stream(ReaderStream::new(file));
+        return Ok((StatusCode::OK, headers_out, body));
+    }
+
+    let key = state
+        .master_key
+        .clone()
+        .ok_or_else(|| AppError::Crypto("encrypted file but no master key configured".to_string()))?;
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(8);
+    tokio::task::spawn_blocking(move || {
+        let result: Result<(), std::io::Error> = (|| {
+            let input = std::fs::File::open(abs)?;
+            let decryptor = age::Decryptor::new(std::io::BufReader::new(input))
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+            let identity = age::scrypt::Identity::new(key);
+            let mut reader = decryptor
+                .decrypt(iter::once(&identity as &dyn age::Identity))
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+
+            let mut buf = vec![0u8; 64 * 1024];
+            loop {
+                let n = reader.read(&mut buf)?;
+                if n == 0 {
+                    break;
+                }
+                if tx.blocking_send(Ok(Bytes::copy_from_slice(&buf[..n]))).is_err() {
+                    break;
+                }
+            }
+            Ok(())
+        })();
+        if let Err(e) = result {
+            let _ = tx.blocking_send(Err(e));
+        }
+    });
+
+    let body = Body::from_stream(ReceiverStream::new(rx));
+    Ok((StatusCode::OK, headers_out, body))
+}
+
 fn parse_api_keys_json(raw: &str) -> HashMap<String, ApiKey> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -723,6 +1033,14 @@ async fn main() -> Result<(), anyhow::Error> {
         .as_deref()
         .filter(|s| !s.is_empty())
         .map(|s| SecretString::from(s.to_string()));
+    let signing_key = std::env::var("RUSTFS_SIGNING_KEY")
+        .ok()
+        .map(|v| v.trim().as_bytes().to_vec())
+        .filter(|v| !v.is_empty());
+    let public_base_url = std::env::var("RUSTFS_PUBLIC_BASE_URL")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
 
     let state = AppState {
         data_dir: PathBuf::from(data_dir),
@@ -730,6 +1048,8 @@ async fn main() -> Result<(), anyhow::Error> {
         require_api_key,
         api_keys: Arc::new(parse_api_keys_json(&api_keys_json)),
         master_key,
+        signing_key,
+        public_base_url,
     };
 
     fs::create_dir_all(&state.data_dir).await?;
@@ -752,6 +1072,8 @@ async fn main() -> Result<(), anyhow::Error> {
         .route("/v1/files", post(ingest).get(search))
         .route("/v1/files/:file_id/meta", get(meta))
         .route("/v1/files/:file_id", get(download))
+        .route("/v1/files/:file_id/link", post(create_link))
+        .route("/v1/public/download", get(public_download))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

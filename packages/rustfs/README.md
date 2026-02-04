@@ -48,6 +48,25 @@ Response:
 
 `GET /v1/files/:file_id`
 
+### Public share link (signed, short-lived)
+
+`POST /v1/files/:file_id/link`
+
+Body:
+
+```json
+{ "ttl_seconds": 300 }
+```
+
+Response includes:
+
+- `path`: relative public download path
+- `url`: absolute URL when `RUSTFS_PUBLIC_BASE_URL` is set
+
+Public download:
+
+`GET /v1/public/download?token=...`
+
 ## Configuration
 
 - `RUSTFS_PORT` (default `8099`)
@@ -56,3 +75,5 @@ Response:
 - `RUSTFS_REQUIRE_API_KEY` (default `true`)
 - `RUSTFS_API_KEYS_JSON`: JSON array of `{ "key": "...", "tenant_id": "...", "role": "..." }`
 - `RUSTFS_MASTER_KEY` (optional): enables encryption at rest for newly ingested files
+- `RUSTFS_SIGNING_KEY` (required for share links): HMAC signing secret
+- `RUSTFS_PUBLIC_BASE_URL` (optional): used to return absolute share URLs
