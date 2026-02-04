@@ -3,16 +3,25 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
+import { DeepMemoryClient } from "../../deep-memory/client.js";
 import { RustFsClient } from "../../rustfs/client.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
+import { resolveDeepMemoryConfig } from "../deep-memory.js";
 import { resolveRustFsConfig } from "../rustfs.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
 const FileSearchSchema = Type.Object({
   query: Type.Optional(Type.String()),
+  semanticQuery: Type.Optional(Type.String()),
   sessionId: Type.Optional(Type.String()),
   mime: Type.Optional(Type.String()),
+  extractStatus: Type.Optional(Type.String()),
   limit: Type.Optional(Type.Number()),
+  includeSemantic: Type.Optional(Type.Boolean()),
+  semanticMaxFiles: Type.Optional(Type.Number()),
+  semanticMaxMemories: Type.Optional(Type.Number()),
+  semanticMaxChars: Type.Optional(Type.Number()),
+  rerank: Type.Optional(Type.Boolean()),
 });
 
 const FileSendSchema = Type.Object({
@@ -44,6 +53,20 @@ function buildClient(cfg: OpenClawConfig, agentId: string): RustFsClient | null 
   });
 }
 
+function buildDeepMemoryClient(cfg: OpenClawConfig, agentId: string): DeepMemoryClient | null {
+  const resolved = resolveDeepMemoryConfig(cfg, agentId);
+  if (!resolved) {
+    return null;
+  }
+  return new DeepMemoryClient({
+    baseUrl: resolved.baseUrl,
+    timeoutMs: resolved.timeoutMs,
+    cache: resolved.retrieve.cache,
+    namespace: resolved.namespace,
+    apiKey: resolved.apiKey,
+  });
+}
+
 export function createFileSearchTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
@@ -57,6 +80,7 @@ export function createFileSearchTool(options: {
   if (!client) {
     return null;
   }
+  const deep = buildDeepMemoryClient(cfg, agentId);
   return {
     label: "File Search",
     name: "file_search",
@@ -66,14 +90,110 @@ export function createFileSearchTool(options: {
     execute: async (_toolCallId, params) => {
       try {
         const query = readStringParam(params, "query", { required: false, label: "query" });
+        const semanticQuery = readStringParam(params, "semanticQuery", {
+          required: false,
+          label: "semanticQuery",
+        });
         const sessionId = readStringParam(params, "sessionId", {
           required: false,
           label: "sessionId",
         });
         const mime = readStringParam(params, "mime", { required: false, label: "mime" });
+        const extractStatus = readStringParam(params, "extractStatus", {
+          required: false,
+          label: "extractStatus",
+        });
         const limit = readNumberParam(params, "limit", { integer: true });
-        const out = await client.search({ query, sessionId, mime, limit });
-        return jsonResult(out);
+        const includeSemantic = Boolean((params as Record<string, unknown>).includeSemantic);
+        const rerank = Boolean((params as Record<string, unknown>).rerank);
+        const semanticMaxFiles =
+          readNumberParam(params, "semanticMaxFiles", { integer: true }) ?? 10;
+        const semanticMaxMemories =
+          readNumberParam(params, "semanticMaxMemories", { integer: true }) ?? 8;
+        const semanticMaxChars =
+          readNumberParam(params, "semanticMaxChars", { integer: true }) ?? 800;
+
+        const out = await client.search({
+          query,
+          sessionId,
+          mime,
+          extractStatus,
+          limit,
+        });
+        if (!out.ok || !includeSemantic) {
+          return jsonResult(out);
+        }
+
+        if (!deep) {
+          return jsonResult({
+            ...out,
+            semantic: { ok: false, error: "deep-memory not configured for this agent" },
+          });
+        }
+
+        const userInput = (semanticQuery ?? query ?? "").trim();
+        if (!userInput) {
+          return jsonResult({
+            ...out,
+            semantic: {
+              ok: false,
+              error: "semanticQuery or query required for includeSemantic=true",
+            },
+          });
+        }
+
+        const semanticItems = out.items.slice(0, Math.max(1, Math.min(50, semanticMaxFiles)));
+        const semanticIds = new Set(semanticItems.map((i) => i.file_id));
+        const decorated: Array<Record<string, unknown>> = [];
+        const scoreOf = (v: unknown): number => {
+          const score = (v as { semantic?: { score?: unknown } } | null | undefined)?.semantic
+            ?.score;
+          return typeof score === "number" ? score : 0;
+        };
+        for (const item of out.items) {
+          if (!semanticIds.has(item.file_id)) {
+            decorated.push(item);
+            continue;
+          }
+          const dmSessionId = `rustfs:file:${item.file_id}`;
+          const retrieved = await deep.retrieveContext({
+            userInput,
+            sessionId: dmSessionId,
+            maxMemories: Math.max(1, Math.min(50, semanticMaxMemories)),
+          });
+          const context = (retrieved.context ?? "").trim();
+          const contextClamped =
+            context.length > semanticMaxChars ? context.slice(0, semanticMaxChars) : context;
+          const memories = Array.isArray(retrieved.memories) ? retrieved.memories : [];
+          const score = memories.reduce(
+            (acc, m) => acc + (typeof m.relevance === "number" ? m.relevance : 0),
+            0,
+          );
+          decorated.push({
+            ...item,
+            semantic: {
+              deepMemorySessionId: dmSessionId,
+              score,
+              entities: Array.isArray(retrieved.entities) ? retrieved.entities.slice(0, 20) : [],
+              topics: Array.isArray(retrieved.topics) ? retrieved.topics.slice(0, 20) : [],
+              context: contextClamped,
+              memories: memories
+                .slice(0, Math.max(1, Math.min(50, semanticMaxMemories)))
+                .map((m) => ({
+                  id: m.id,
+                  relevance: m.relevance,
+                  importance: m.importance,
+                  content: typeof m.content === "string" ? m.content.slice(0, 400) : undefined,
+                })),
+            },
+          });
+        }
+
+        const finalItems = rerank
+          ? decorated.toSorted((a, b) => scoreOf(b) - scoreOf(a))
+          : decorated;
+
+        return jsonResult({ ok: true, items: finalItems, semantic: { ok: true } });
       } catch (err) {
         return jsonResult({ ok: false, error: err instanceof Error ? err.message : String(err) });
       }

@@ -76,3 +76,33 @@ describe("file_ingest tool schema", () => {
     expect(props).toHaveProperty("hint");
   });
 });
+
+describe("file_search tool schema", () => {
+  test("includes semantic retrieval options", async () => {
+    const mod = await import("./file-tools.js");
+    const cfg = {
+      agents: {
+        defaults: {
+          rustfs: {
+            enabled: true,
+            baseUrl: "http://localhost:8099",
+            project: "default",
+          },
+        },
+        list: [{ id: "a", default: true }],
+      },
+    } as unknown as OpenClawConfig;
+
+    const tool = mod.createFileSearchTool({ config: cfg, agentSessionKey: "session" });
+    expect(tool?.name).toBe("file_search");
+    const props = (tool as unknown as { parameters?: { properties?: Record<string, unknown> } })
+      .parameters?.properties;
+    expect(props).toBeTruthy();
+    expect(props).toHaveProperty("includeSemantic");
+    expect(props).toHaveProperty("semanticQuery");
+    expect(props).toHaveProperty("semanticMaxFiles");
+    expect(props).toHaveProperty("semanticMaxMemories");
+    expect(props).toHaveProperty("semanticMaxChars");
+    expect(props).toHaveProperty("rerank");
+  });
+});

@@ -69,6 +69,7 @@ export class RustFsClient {
     query?: string;
     sessionId?: string;
     mime?: string;
+    extractStatus?: string;
     limit?: number;
   }): Promise<RustFsSearchResponse> {
     const qs = new URLSearchParams();
@@ -81,6 +82,9 @@ export class RustFsClient {
     }
     if (params.mime?.trim()) {
       qs.set("mime", params.mime.trim());
+    }
+    if (params.extractStatus?.trim()) {
+      qs.set("extract_status", params.extractStatus.trim());
     }
     if (typeof params.limit === "number" && Number.isFinite(params.limit)) {
       qs.set("limit", String(Math.max(1, Math.min(200, Math.trunc(params.limit)))));
