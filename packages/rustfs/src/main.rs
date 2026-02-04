@@ -762,6 +762,25 @@ struct ExtractStatusResponse {
     status: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct TombstonedQuery {
+    tenant_id: Option<String>,
+    since_ms: Option<i64>,
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct TombstonedItem {
+    file_id: String,
+    deleted_at_ms: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct TombstonedResponse {
+    ok: bool,
+    items: Vec<TombstonedItem>,
+}
+
 async fn meta(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1012,6 +1031,45 @@ async fn set_extract_status(
             status,
         }),
     ))
+}
+
+async fn tombstoned(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<TombstonedQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let auth = auth_from_headers(&state, &headers, q.tenant_id.as_deref())?;
+    assert_can_read(&auth)?;
+    let tenant_id = auth.tenant_id;
+    let limit = q.limit.unwrap_or(100).clamp(1, 200) as i64;
+    let since_ms = q.since_ms.unwrap_or(0).max(0);
+
+    let tenant_id_db = tenant_id.clone();
+    let items = with_conn(&state, move |conn| -> Result<Vec<TombstonedItem>, AppError> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT file_id, deleted_at_ms
+                 FROM files
+                 WHERE tenant_id=?1 AND deleted_at_ms IS NOT NULL AND deleted_at_ms > ?2
+                 ORDER BY deleted_at_ms ASC
+                 LIMIT ?3",
+            )
+            .map_err(|e| AppError::Db(e.to_string()))?;
+        let mut rows = stmt
+            .query(params![tenant_id_db, since_ms, limit])
+            .map_err(|e| AppError::Db(e.to_string()))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().map_err(|e| AppError::Db(e.to_string()))? {
+            out.push(TombstonedItem {
+                file_id: row.get(0).map_err(|e| AppError::Db(e.to_string()))?,
+                deleted_at_ms: row.get(1).map_err(|e| AppError::Db(e.to_string()))?,
+            });
+        }
+        Ok(out)
+    })
+    .await?;
+
+    Ok((StatusCode::OK, Json(TombstonedResponse { ok: true, items })))
 }
 
 async fn download(
@@ -1526,6 +1584,7 @@ async fn main() -> Result<(), anyhow::Error> {
         .route("/readyz", get(readyz))
         .route("/v1/files", post(ingest).get(search))
         .route("/v1/files/pending_extract", get(pending_extract))
+        .route("/v1/files/tombstoned", get(tombstoned))
         .route("/v1/files/:file_id/meta", get(meta))
         .route("/v1/files/:file_id", get(download))
         .route("/v1/files/:file_id/link", post(create_link))

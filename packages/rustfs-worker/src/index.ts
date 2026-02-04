@@ -1,3 +1,5 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import pino from "pino";
 import { z } from "zod";
 
@@ -32,6 +34,10 @@ const EnvSchema = z.object({
     .int()
     .positive()
     .default(2 * 1024 * 1024),
+  RUSTFS_TOMBSTONE_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
+  RUSTFS_TOMBSTONE_LIMIT: z.coerce.number().int().positive().max(200).default(100),
+  RUSTFS_TOMBSTONE_SINCE_MS: z.coerce.number().int().nonnegative().default(0),
+  WORKER_STATE_PATH: z.string().optional(),
 
   DEEP_MEMORY_BASE_URL: z.string().min(1),
   DEEP_MEMORY_API_KEY: z.string().optional(),
@@ -183,12 +189,49 @@ function buildDeepMemoryMessages(params: {
   return [{ role: "user", content }];
 }
 
+const WorkerStateSchema = z.object({
+  tombstoneSinceMs: z.coerce.number().int().nonnegative().default(0),
+});
+
+type WorkerState = z.infer<typeof WorkerStateSchema>;
+
+async function loadWorkerState(
+  path: string | undefined,
+  fallback: WorkerState,
+): Promise<WorkerState> {
+  const p = path?.trim();
+  if (!p) {
+    return fallback;
+  }
+  try {
+    const raw = await readFile(p, "utf-8");
+    return WorkerStateSchema.parse(JSON.parse(raw));
+  } catch {
+    return fallback;
+  }
+}
+
+async function saveWorkerState(path: string | undefined, state: WorkerState): Promise<void> {
+  const p = path?.trim();
+  if (!p) {
+    return;
+  }
+  await mkdir(dirname(p), { recursive: true });
+  await writeFile(p, JSON.stringify(state, null, 2), { encoding: "utf-8" });
+}
+
 async function main(): Promise<void> {
   const env = EnvSchema.parse(process.env);
   const log = pino({ name: "rustfs-worker" });
 
   const rustfsBaseUrl = normalizeBaseUrl(env.RUSTFS_BASE_URL);
   const deepBaseUrl = normalizeBaseUrl(env.DEEP_MEMORY_BASE_URL);
+
+  const loadedState = await loadWorkerState(env.WORKER_STATE_PATH, {
+    tombstoneSinceMs: env.RUSTFS_TOMBSTONE_SINCE_MS,
+  });
+  let tombstoneSinceMs = Math.max(env.RUSTFS_TOMBSTONE_SINCE_MS, loadedState.tombstoneSinceMs);
+  let lastTombstonePollAt = 0;
 
   log.info(
     {
@@ -199,11 +242,60 @@ async function main(): Promise<void> {
       leaseMs: env.RUSTFS_LEASE_MS,
       pendingLimit: env.RUSTFS_PENDING_LIMIT,
       maxDownloadBytes: env.RUSTFS_MAX_DOWNLOAD_BYTES,
+      tombstonePollIntervalMs: env.RUSTFS_TOMBSTONE_POLL_INTERVAL_MS,
+      tombstoneLimit: env.RUSTFS_TOMBSTONE_LIMIT,
+      tombstoneSinceMs,
       deepNamespace: env.DEEP_MEMORY_NAMESPACE ?? undefined,
       deepAsync: env.DEEP_MEMORY_ASYNC,
     },
     "worker starting",
   );
+
+  async function pollTombstonesIfDue(): Promise<void> {
+    const now = Date.now();
+    if (now - lastTombstonePollAt < env.RUSTFS_TOMBSTONE_POLL_INTERVAL_MS) {
+      return;
+    }
+    lastTombstonePollAt = now;
+    const tombUrl = new URL(`${rustfsBaseUrl}/v1/files/tombstoned`);
+    if (env.RUSTFS_TENANT_ID?.trim()) {
+      tombUrl.searchParams.set("tenant_id", env.RUSTFS_TENANT_ID.trim());
+    }
+    tombUrl.searchParams.set("since_ms", String(tombstoneSinceMs));
+    tombUrl.searchParams.set("limit", String(env.RUSTFS_TOMBSTONE_LIMIT));
+
+    const tomb = await fetchJson<{
+      ok: boolean;
+      items: Array<{ file_id: string; deleted_at_ms: number }>;
+    }>({
+      url: tombUrl.toString(),
+      method: "GET",
+      apiKey: env.RUSTFS_API_KEY,
+      timeoutMs: env.DEEP_MEMORY_TIMEOUT_MS,
+    });
+
+    const tItems = tomb.items ?? [];
+    for (const item of tItems) {
+      const sessionId = `rustfs:file:${item.file_id}`;
+      const res = await fetchJson<unknown>({
+        url: `${deepBaseUrl}/forget`,
+        method: "POST",
+        apiKey: env.DEEP_MEMORY_API_KEY,
+        timeoutMs: env.DEEP_MEMORY_TIMEOUT_MS,
+        body: {
+          namespace: env.DEEP_MEMORY_NAMESPACE?.trim() || undefined,
+          session_id: sessionId,
+          async: true,
+        },
+      });
+      log.info(
+        { file_id: item.file_id, sessionId, deleted_at_ms: item.deleted_at_ms, res },
+        "forgot tombstoned file",
+      );
+      tombstoneSinceMs = Math.max(tombstoneSinceMs, item.deleted_at_ms);
+      await saveWorkerState(env.WORKER_STATE_PATH, { tombstoneSinceMs }).catch(() => {});
+    }
+  }
 
   while (true) {
     try {
@@ -222,6 +314,13 @@ async function main(): Promise<void> {
       });
 
       const items = pending.items ?? [];
+      try {
+        await pollTombstonesIfDue();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn({ err: message }, "tombstone forget poll failed");
+      }
+
       if (items.length === 0) {
         await sleep(env.RUSTFS_POLL_INTERVAL_MS);
         continue;
