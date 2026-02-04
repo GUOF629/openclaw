@@ -72,6 +72,7 @@ struct SearchQuery {
     session_id: Option<String>,
     q: Option<String>,
     mime: Option<String>,
+    extract_status: Option<String>,
     limit: Option<u32>,
 }
 
@@ -645,6 +646,7 @@ async fn search(
     let session_id = q.session_id.clone().filter(|s| !s.trim().is_empty());
     let query_text = q.q.clone().filter(|s| !s.trim().is_empty());
     let mime = q.mime.clone().filter(|s| !s.trim().is_empty());
+    let extract_status = q.extract_status.clone().filter(|s| !s.trim().is_empty());
 
     let tenant_id_db = tenant_id.clone();
     let items = with_conn(&state, move |conn| -> Result<Vec<FileMeta>, AppError> {
@@ -668,6 +670,10 @@ async fn search(
             args.push(like.clone().into());
             args.push(like.clone().into());
             args.push(like.into());
+        }
+        if let Some(status) = &extract_status {
+            sql.push_str(" AND extract_status=?");
+            args.push(status.clone().into());
         }
         sql.push_str(" ORDER BY created_at_ms DESC LIMIT ?");
         args.push(limit.into());
@@ -713,6 +719,45 @@ async fn search(
 #[derive(Debug, Deserialize)]
 struct PathParams {
     file_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PendingQuery {
+    tenant_id: Option<String>,
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct PendingResponse {
+    ok: bool,
+    items: Vec<FileMeta>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnnotationsRequest {
+    // Keep this opaque and LLM-friendly: semantics are application-defined.
+    annotations: serde_json::Value,
+    source: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AnnotationsResponse {
+    ok: bool,
+    file_id: String,
+    updated_at_ms: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExtractStatusRequest {
+    status: String,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ExtractStatusResponse {
+    ok: bool,
+    file_id: String,
+    status: String,
 }
 
 async fn meta(
@@ -771,6 +816,193 @@ async fn meta(
         Some(v) => Ok((StatusCode::OK, Json(v))),
         None => Err(AppError::NotFound),
     }
+}
+
+async fn pending_extract(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<PendingQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let auth = auth_from_headers(&state, &headers, q.tenant_id.as_deref())?;
+    assert_can_read(&auth)?;
+    let tenant_id = auth.tenant_id;
+    let limit = q.limit.unwrap_or(25).clamp(1, 200) as i64;
+
+    let tenant_id_db = tenant_id.clone();
+    let items = with_conn(&state, move |conn| -> Result<Vec<FileMeta>, AppError> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT file_id, tenant_id, session_id, filename, mime, size, sha256, created_at_ms, source, encrypted, extract_status, extract_updated_at_ms, extract_attempt, extract_error, annotations_json
+                 FROM files
+                 WHERE tenant_id=?1 AND deleted_at_ms IS NULL AND (extract_status IS NULL OR extract_status='pending')
+                 ORDER BY created_at_ms ASC
+                 LIMIT ?2",
+            )
+            .map_err(|e| AppError::Db(e.to_string()))?;
+        let mut rows = stmt
+            .query(params![tenant_id_db, limit])
+            .map_err(|e| AppError::Db(e.to_string()))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().map_err(|e| AppError::Db(e.to_string()))? {
+            let annotations_raw: Option<String> = row.get(14).ok();
+            let annotations = annotations_raw
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+            out.push(FileMeta {
+                file_id: row.get(0).map_err(|e| AppError::Db(e.to_string()))?,
+                tenant_id: row.get(1).map_err(|e| AppError::Db(e.to_string()))?,
+                session_id: row.get(2).map_err(|e| AppError::Db(e.to_string()))?,
+                filename: row.get(3).map_err(|e| AppError::Db(e.to_string()))?,
+                mime: row.get(4).map_err(|e| AppError::Db(e.to_string()))?,
+                size: row.get(5).map_err(|e| AppError::Db(e.to_string()))?,
+                sha256: row.get(6).map_err(|e| AppError::Db(e.to_string()))?,
+                created_at_ms: row.get(7).map_err(|e| AppError::Db(e.to_string()))?,
+                source: row.get(8).map_err(|e| AppError::Db(e.to_string()))?,
+                encrypted: {
+                    let v: i64 = row.get(9).map_err(|e| AppError::Db(e.to_string()))?;
+                    v != 0
+                },
+                extract_status: row.get(10).ok(),
+                extract_updated_at_ms: row.get(11).ok(),
+                extract_attempt: row.get(12).ok(),
+                extract_error: row.get(13).ok(),
+                annotations,
+            });
+        }
+        Ok(out)
+    })
+    .await?;
+
+    Ok((StatusCode::OK, Json(PendingResponse { ok: true, items })))
+}
+
+async fn upsert_annotations(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(path): axum::extract::Path<PathParams>,
+    Json(req): Json<AnnotationsRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let request_id = headers.get("x-request-id").and_then(|v| v.to_str().ok());
+    let auth = auth_from_headers(&state, &headers, None)?;
+    assert_can_write(&auth)?;
+
+    let file_id = path.file_id.trim().to_string();
+    if file_id.is_empty() {
+        return Err(AppError::InvalidRequest("file_id required".to_string()));
+    }
+    let now = now_ms();
+    let tenant_id = auth.tenant_id.clone();
+    let file_id_db = file_id.clone();
+    let annotations_json =
+        serde_json::to_string(&req.annotations).map_err(|e| AppError::InvalidRequest(e.to_string()))?;
+
+    let updated = with_conn(&state, move |conn| -> Result<usize, AppError> {
+        let n = conn
+            .execute(
+                "UPDATE files SET annotations_json=?1, extract_updated_at_ms=?2 WHERE tenant_id=?3 AND file_id=?4 AND deleted_at_ms IS NULL",
+                params![annotations_json, now, tenant_id, file_id_db],
+            )
+            .map_err(|e| AppError::Db(e.to_string()))?;
+        Ok(n)
+    })
+    .await?;
+    if updated == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    let source = req.source.unwrap_or_else(|| "unknown".to_string());
+    append_audit(
+        &state,
+        AuditEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            ts_ms: now_ms(),
+            action: "annotations_upsert",
+            tenant_id: &auth.tenant_id,
+            key_id: Some(&auth.key_id),
+            request_id,
+            file_id: Some(&file_id),
+            extra: serde_json::json!({ "source": source }),
+        },
+    )
+    .await;
+
+    Ok((
+        StatusCode::OK,
+        Json(AnnotationsResponse {
+            ok: true,
+            file_id,
+            updated_at_ms: now,
+        }),
+    ))
+}
+
+async fn set_extract_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(path): axum::extract::Path<PathParams>,
+    Json(req): Json<ExtractStatusRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let request_id = headers.get("x-request-id").and_then(|v| v.to_str().ok());
+    let auth = auth_from_headers(&state, &headers, None)?;
+    assert_can_write(&auth)?;
+
+    let file_id = path.file_id.trim().to_string();
+    if file_id.is_empty() {
+        return Err(AppError::InvalidRequest("file_id required".to_string()));
+    }
+    let status = req.status.trim().to_string();
+    if status.is_empty() {
+        return Err(AppError::InvalidRequest("status required".to_string()));
+    }
+
+    let now = now_ms();
+    let tenant_id = auth.tenant_id.clone();
+    let file_id_db = file_id.clone();
+    let error = req.error.unwrap_or_default();
+    let status_db = status.clone();
+    let error_db = error.clone();
+    let updated = with_conn(&state, move |conn| -> Result<usize, AppError> {
+        let n = conn
+            .execute(
+                "UPDATE files
+                 SET extract_status=?1,
+                     extract_updated_at_ms=?2,
+                     extract_attempt=COALESCE(extract_attempt, 0) + 1,
+                     extract_error=?3
+                 WHERE tenant_id=?4 AND file_id=?5 AND deleted_at_ms IS NULL",
+                params![status_db, now, error_db, tenant_id, file_id_db],
+            )
+            .map_err(|e| AppError::Db(e.to_string()))?;
+        Ok(n)
+    })
+    .await?;
+    if updated == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    append_audit(
+        &state,
+        AuditEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            ts_ms: now_ms(),
+            action: "extract_status",
+            tenant_id: &auth.tenant_id,
+            key_id: Some(&auth.key_id),
+            request_id,
+            file_id: Some(&file_id),
+            extra: serde_json::json!({ "status": status, "has_error": !error.is_empty() }),
+        },
+    )
+    .await;
+
+    Ok((
+        StatusCode::OK,
+        Json(ExtractStatusResponse {
+            ok: true,
+            file_id,
+            status,
+        }),
+    ))
 }
 
 async fn download(
@@ -1284,9 +1516,12 @@ async fn main() -> Result<(), anyhow::Error> {
         .route("/health", get(health))
         .route("/readyz", get(readyz))
         .route("/v1/files", post(ingest).get(search))
+        .route("/v1/files/pending_extract", get(pending_extract))
         .route("/v1/files/:file_id/meta", get(meta))
         .route("/v1/files/:file_id", get(download))
         .route("/v1/files/:file_id/link", post(create_link))
+        .route("/v1/files/:file_id/annotations", post(upsert_annotations))
+        .route("/v1/files/:file_id/extract_status", post(set_extract_status))
         .route("/v1/files/:file_id/tombstone", post(tombstone))
         .route("/v1/public/download", get(public_download))
         .layer(TraceLayer::new_for_http())
