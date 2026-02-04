@@ -1,0 +1,28 @@
+[package]
+name = "rustfs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0.99"
+axum = { version = "0.8.1", features = ["multipart"] }
+bytes = "1.10.1"
+hex = "0.4.3"
+mime = "0.3.17"
+rusqlite = { version = "0.36.0", features = ["bundled"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+sha2 = "0.10.8"
+tempfile = "3.20.0"
+thiserror = "2.0.16"
+tokio = { version = "1.46.1", features = ["macros", "rt-multi-thread", "signal", "fs", "io-util"] }
+tokio-stream = "0.1.17"
+tokio-util = { version = "0.7.16", features = ["io"] }
+tower-http = { version = "0.6.6", features = ["trace"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+uuid = { version = "1.18.1", features = ["v4"] }
+
+age = "0.11.1"
+secrecy = "0.10.3"

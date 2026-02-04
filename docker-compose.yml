@@ -160,7 +160,33 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # RustFS (optional). Enable via: docker compose --profile rustfs up -d
+  rustfs:
+    profiles: ["rustfs"]
+    build:
+      context: .
+      dockerfile: packages/rustfs/Dockerfile
+    environment:
+      RUSTFS_PORT: 8099
+      RUSTFS_DATA_DIR: /data
+      RUSTFS_DB_PATH: /data/meta.db
+      RUSTFS_REQUIRE_API_KEY: "${OPENCLAW_RUSTFS_REQUIRE_API_KEY:-true}"
+      RUSTFS_API_KEYS_JSON: "${OPENCLAW_RUSTFS_API_KEYS_JSON:-}"
+      # Optional: enables encryption at rest for newly ingested files
+      RUSTFS_MASTER_KEY: "${OPENCLAW_RUSTFS_MASTER_KEY:-}"
+    ports:
+      - "${OPENCLAW_RUSTFS_PORT:-8099}:8099"
+    volumes:
+      - rustfs_data:/data
+    healthcheck:
+      test: ["CMD", "sh", "-lc", "curl -fsS http://127.0.0.1:8099/readyz >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
 volumes:
   qdrant_data:
   neo4j_data:
   deepmem_data:
+  rustfs_data:
