@@ -44,6 +44,16 @@ Response:
 
 `GET /v1/files/:file_id/meta`
 
+### Tombstone (revoke)
+
+`POST /v1/files/:file_id/tombstone`
+
+Body:
+
+```json
+{ "reason": "user_revoked" }
+```
+
 ### Download
 
 `GET /v1/files/:file_id`
@@ -77,3 +87,4 @@ Public download:
 - `RUSTFS_MASTER_KEY` (optional): enables encryption at rest for newly ingested files
 - `RUSTFS_SIGNING_KEY` (required for share links): HMAC signing secret
 - `RUSTFS_PUBLIC_BASE_URL` (optional): used to return absolute share URLs
+- `RUSTFS_AUDIT_LOG_PATH` (optional): JSONL audit log path

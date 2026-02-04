@@ -40,6 +40,7 @@ struct AppState {
     master_key: Option<SecretString>,
     signing_key: Option<Vec<u8>>,
     public_base_url: Option<String>,
+    audit_log_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -115,6 +116,18 @@ struct LinkResponse {
     path: String,
     url: Option<String>,
     expires_at_ms: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct TombstoneRequest {
+    reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct TombstoneResponse {
+    ok: bool,
+    file_id: String,
+    tombstoned: bool,
 }
 
 #[derive(Error, Debug)]
@@ -253,7 +266,8 @@ CREATE TABLE IF NOT EXISTS files (
   created_at_ms INTEGER NOT NULL,
   source TEXT,
   encrypted INTEGER NOT NULL,
-  storage_path TEXT NOT NULL
+  storage_path TEXT NOT NULL,
+  deleted_at_ms INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_files_tenant_created ON files(tenant_id, created_at_ms DESC);
 CREATE INDEX IF NOT EXISTS idx_files_tenant_session ON files(tenant_id, session_id);
@@ -261,11 +275,56 @@ CREATE INDEX IF NOT EXISTS idx_files_tenant_filename ON files(tenant_id, filenam
 "#,
         )
         .map_err(|e| AppError::Db(e.to_string()))?;
+        // Back-compat: older DBs might not have deleted_at_ms.
+        let _ = conn.execute("ALTER TABLE files ADD COLUMN deleted_at_ms INTEGER", []);
         Ok(())
     })
     .await
     .map_err(|e| AppError::Db(e.to_string()))??;
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct AuditEntry<'a> {
+    id: String,
+    ts_ms: i64,
+    action: &'a str,
+    tenant_id: &'a str,
+    key_id: Option<&'a str>,
+    request_id: Option<&'a str>,
+    file_id: Option<&'a str>,
+    extra: serde_json::Value,
+}
+
+async fn append_audit(
+    state: &AppState,
+    entry: AuditEntry<'_>,
+) {
+    let path = match state.audit_log_path.as_ref() {
+        Some(p) => p,
+        None => return,
+    };
+    let parent = match path.parent() {
+        Some(p) => p,
+        None => return,
+    };
+    if fs::create_dir_all(parent).await.is_err() {
+        return;
+    }
+    let line = match serde_json::to_string(&entry) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let mut file = match fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await
+    {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+    let _ = file.write_all(format!("{line}\n").as_bytes()).await;
 }
 
 async fn with_conn<T>(state: &AppState, f: impl FnOnce(&Connection) -> Result<T, AppError> + Send + 'static) -> Result<T, AppError>
@@ -386,9 +445,10 @@ async fn ingest(
         }
     }
 
+    let request_id = headers.get("x-request-id").and_then(|v| v.to_str().ok());
     let auth = auth_from_headers(&state, &headers, tenant_hint.as_deref())?;
     assert_can_write(&auth)?;
-    let tenant_id = auth.tenant_id;
+    let tenant_id = auth.tenant_id.clone();
     let tmp = tmp_path.ok_or_else(|| AppError::InvalidRequest("missing multipart field: file".to_string()))?;
     let filename = filename.unwrap_or_else(|| "file".to_string());
     let sha256 = hex::encode(sha.finalize());
@@ -412,7 +472,7 @@ async fn ingest(
     let existing = with_conn(&state, move |conn| {
         let mut stmt = conn
             .prepare(
-                "SELECT file_id, sha256, size, encrypted, storage_path FROM files WHERE tenant_id=?1 AND file_id=?2",
+                "SELECT file_id, sha256, size, encrypted, storage_path FROM files WHERE tenant_id=?1 AND file_id=?2 AND deleted_at_ms IS NULL",
             )
             .map_err(|e| AppError::Db(e.to_string()))?;
         let mut rows = stmt
@@ -433,6 +493,20 @@ async fn ingest(
     if let Some((file_id, sha256, size, encrypted)) = existing {
         // Best-effort cleanup tmp
         let _ = fs::remove_file(&tmp).await;
+        append_audit(
+            &state,
+            AuditEntry {
+                id: uuid::Uuid::new_v4().to_string(),
+                ts_ms: now_ms(),
+                action: "ingest",
+                tenant_id: &tenant_id,
+                key_id: Some(&auth.key_id),
+                request_id,
+                file_id: Some(&file_id),
+                extra: serde_json::json!({ "dedup": true, "size": size, "encrypted": encrypted }),
+            },
+        )
+        .await;
         return Ok((
             StatusCode::OK,
             Json(IngestResponse {
@@ -511,6 +585,21 @@ async fn ingest(
     })
     .await?;
 
+    append_audit(
+        &state,
+        AuditEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            ts_ms: now_ms(),
+            action: "ingest",
+            tenant_id: &tenant_id,
+            key_id: Some(&auth.key_id),
+            request_id,
+            file_id: Some(&file_id),
+            extra: serde_json::json!({ "dedup": false, "size": size, "encrypted": encrypted }),
+        },
+    )
+    .await;
+
     Ok((
         StatusCode::OK,
         Json(IngestResponse {
@@ -540,7 +629,7 @@ async fn search(
     let items = with_conn(&state, move |conn| -> Result<Vec<FileMeta>, AppError> {
         let mut sql = String::from(
             "SELECT file_id, tenant_id, session_id, filename, mime, size, sha256, created_at_ms, source, encrypted
-             FROM files WHERE tenant_id=?1",
+             FROM files WHERE tenant_id=?1 AND deleted_at_ms IS NULL",
         );
         let mut args: Vec<rusqlite::types::Value> = vec![tenant_id_db.clone().into()];
 
@@ -613,7 +702,7 @@ async fn meta(
         let mut stmt = conn
             .prepare(
                 "SELECT file_id, tenant_id, session_id, filename, mime, size, sha256, created_at_ms, source, encrypted
-                 FROM files WHERE tenant_id=?1 AND file_id=?2",
+                 FROM files WHERE tenant_id=?1 AND file_id=?2 AND deleted_at_ms IS NULL",
             )
             .map_err(|e| AppError::Db(e.to_string()))?;
         let mut rows = stmt
@@ -670,7 +759,7 @@ async fn download(
     let row = with_conn(&state, move |conn| -> Result<Option<Row>, AppError> {
         let mut stmt = conn
             .prepare(
-                "SELECT filename, mime, encrypted, storage_path FROM files WHERE tenant_id=?1 AND file_id=?2",
+                "SELECT filename, mime, encrypted, storage_path FROM files WHERE tenant_id=?1 AND file_id=?2 AND deleted_at_ms IS NULL",
             )
             .map_err(|e| AppError::Db(e.to_string()))?;
         let mut rows = stmt
@@ -829,7 +918,7 @@ async fn create_link(
     let file_id_db = file_id.clone();
     let exists = with_conn(&state, move |conn| -> Result<bool, AppError> {
         let mut stmt = conn
-            .prepare("SELECT COUNT(*) FROM files WHERE tenant_id=?1 AND file_id=?2")
+            .prepare("SELECT COUNT(*) FROM files WHERE tenant_id=?1 AND file_id=?2 AND deleted_at_ms IS NULL")
             .map_err(|e| AppError::Db(e.to_string()))?;
         let count: i64 = stmt
             .query_row(params![tenant_id_db, file_id_db], |row| row.get(0))
@@ -854,6 +943,21 @@ async fn create_link(
         let b = base.trim_end_matches('/');
         format!("{b}{path}")
     });
+    let request_id = headers.get("x-request-id").and_then(|v| v.to_str().ok());
+    append_audit(
+        &state,
+        AuditEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            ts_ms: now_ms(),
+            action: "link_create",
+            tenant_id: &auth.tenant_id,
+            key_id: Some(&auth.key_id),
+            request_id,
+            file_id: Some(&file_id),
+            extra: serde_json::json!({ "ttl_seconds": ttl }),
+        },
+    )
+    .await;
     Ok((
         StatusCode::OK,
         Json(LinkResponse {
@@ -879,6 +983,20 @@ async fn public_download(
     // This endpoint bypasses API key auth but is constrained by the signed token.
     let tenant_id = payload.tenant_id;
     let file_id = payload.file_id;
+    append_audit(
+        &state,
+        AuditEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            ts_ms: now_ms(),
+            action: "public_download",
+            tenant_id: &tenant_id,
+            key_id: None,
+            request_id: None,
+            file_id: Some(&file_id),
+            extra: serde_json::json!({}),
+        },
+    )
+    .await;
 
     #[derive(Debug)]
     struct Row {
@@ -893,7 +1011,7 @@ async fn public_download(
     let row = with_conn(&state, move |conn| -> Result<Option<Row>, AppError> {
         let mut stmt = conn
             .prepare(
-                "SELECT filename, mime, encrypted, storage_path FROM files WHERE tenant_id=?1 AND file_id=?2",
+                "SELECT filename, mime, encrypted, storage_path FROM files WHERE tenant_id=?1 AND file_id=?2 AND deleted_at_ms IS NULL",
             )
             .map_err(|e| AppError::Db(e.to_string()))?;
         let mut rows = stmt
@@ -973,6 +1091,57 @@ async fn public_download(
     Ok((StatusCode::OK, headers_out, body))
 }
 
+async fn tombstone(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(path): axum::extract::Path<PathParams>,
+    Json(req): Json<TombstoneRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let request_id = headers.get("x-request-id").and_then(|v| v.to_str().ok());
+    let auth = auth_from_headers(&state, &headers, None)?;
+    assert_can_write(&auth)?;
+    let file_id = path.file_id.trim().to_string();
+    if file_id.is_empty() {
+        return Err(AppError::InvalidRequest("file_id required".to_string()));
+    }
+    let tenant_id = auth.tenant_id.clone();
+    let file_id_db = file_id.clone();
+    let ts = now_ms();
+    let updated = with_conn(&state, move |conn| -> Result<usize, AppError> {
+        let n = conn
+            .execute(
+                "UPDATE files SET deleted_at_ms=?1 WHERE tenant_id=?2 AND file_id=?3 AND deleted_at_ms IS NULL",
+                params![ts, tenant_id, file_id_db],
+            )
+            .map_err(|e| AppError::Db(e.to_string()))?;
+        Ok(n)
+    })
+    .await?;
+    let tombstoned = updated > 0;
+    append_audit(
+        &state,
+        AuditEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            ts_ms: now_ms(),
+            action: "tombstone",
+            tenant_id: &auth.tenant_id,
+            key_id: Some(&auth.key_id),
+            request_id,
+            file_id: Some(&file_id),
+            extra: serde_json::json!({ "reason": req.reason, "tombstoned": tombstoned }),
+        },
+    )
+    .await;
+    Ok((
+        StatusCode::OK,
+        Json(TombstoneResponse {
+            ok: true,
+            file_id,
+            tombstoned,
+        }),
+    ))
+}
+
 fn parse_api_keys_json(raw: &str) -> HashMap<String, ApiKey> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -1041,6 +1210,11 @@ async fn main() -> Result<(), anyhow::Error> {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
+    let audit_log_path = std::env::var("RUSTFS_AUDIT_LOG_PATH")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
 
     let state = AppState {
         data_dir: PathBuf::from(data_dir),
@@ -1050,6 +1224,7 @@ async fn main() -> Result<(), anyhow::Error> {
         master_key,
         signing_key,
         public_base_url,
+        audit_log_path,
     };
 
     fs::create_dir_all(&state.data_dir).await?;
@@ -1073,6 +1248,7 @@ async fn main() -> Result<(), anyhow::Error> {
         .route("/v1/files/:file_id/meta", get(meta))
         .route("/v1/files/:file_id", get(download))
         .route("/v1/files/:file_id/link", post(create_link))
+        .route("/v1/files/:file_id/tombstone", post(tombstone))
         .route("/v1/public/download", get(public_download))
         .layer(TraceLayer::new_for_http())
         .with_state(state);

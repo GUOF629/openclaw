@@ -178,6 +178,8 @@ services:
       RUSTFS_SIGNING_KEY: "${OPENCLAW_RUSTFS_SIGNING_KEY:-}"
       # Optional base URL used when returning share links (otherwise returns a relative path).
       RUSTFS_PUBLIC_BASE_URL: "${OPENCLAW_RUSTFS_PUBLIC_BASE_URL:-}"
+      # Optional audit log (JSONL) for sensitive actions.
+      RUSTFS_AUDIT_LOG_PATH: "${OPENCLAW_RUSTFS_AUDIT_LOG_PATH:-/data/audit/audit.jsonl}"
     ports:
       - "${OPENCLAW_RUSTFS_PORT:-8099}:8099"
     volumes:
