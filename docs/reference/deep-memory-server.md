@@ -156,4 +156,3 @@ Forget queue:
 - `GET /queue/forget/failed`
 - `GET /queue/forget/failed/export`
 - `POST /queue/forget/failed/retry`
-
