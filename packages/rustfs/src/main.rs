@@ -87,6 +87,11 @@ struct FileMeta {
     created_at_ms: i64,
     source: Option<String>,
     encrypted: bool,
+    extract_status: Option<String>,
+    extract_updated_at_ms: Option<i64>,
+    extract_attempt: Option<i64>,
+    extract_error: Option<String>,
+    annotations: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -267,7 +272,12 @@ CREATE TABLE IF NOT EXISTS files (
   source TEXT,
   encrypted INTEGER NOT NULL,
   storage_path TEXT NOT NULL,
-  deleted_at_ms INTEGER
+  deleted_at_ms INTEGER,
+  extract_status TEXT,
+  extract_updated_at_ms INTEGER,
+  extract_attempt INTEGER,
+  extract_error TEXT,
+  annotations_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_files_tenant_created ON files(tenant_id, created_at_ms DESC);
 CREATE INDEX IF NOT EXISTS idx_files_tenant_session ON files(tenant_id, session_id);
@@ -277,6 +287,11 @@ CREATE INDEX IF NOT EXISTS idx_files_tenant_filename ON files(tenant_id, filenam
         .map_err(|e| AppError::Db(e.to_string()))?;
         // Back-compat: older DBs might not have deleted_at_ms.
         let _ = conn.execute("ALTER TABLE files ADD COLUMN deleted_at_ms INTEGER", []);
+        let _ = conn.execute("ALTER TABLE files ADD COLUMN extract_status TEXT", []);
+        let _ = conn.execute("ALTER TABLE files ADD COLUMN extract_updated_at_ms INTEGER", []);
+        let _ = conn.execute("ALTER TABLE files ADD COLUMN extract_attempt INTEGER", []);
+        let _ = conn.execute("ALTER TABLE files ADD COLUMN extract_error TEXT", []);
+        let _ = conn.execute("ALTER TABLE files ADD COLUMN annotations_json TEXT", []);
         Ok(())
     })
     .await
@@ -562,10 +577,13 @@ async fn ingest(
     let sha256_for_db = sha256.clone();
     let file_id_for_db = file_id.clone();
     let encrypted_i = if encrypted { 1 } else { 0 };
+    let extract_status_for_db = "pending".to_string();
+    let extract_updated_at_for_db = now_ms();
+    let extract_attempt_for_db = 0i64;
     with_conn(&state, move |conn| {
         conn.execute(
-            "INSERT INTO files(file_id, tenant_id, session_id, filename, mime, size, sha256, created_at_ms, source, encrypted, storage_path)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO files(file_id, tenant_id, session_id, filename, mime, size, sha256, created_at_ms, source, encrypted, storage_path, extract_status, extract_updated_at_ms, extract_attempt)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 file_id_for_db,
                 tenant_id_for_db,
@@ -578,6 +596,9 @@ async fn ingest(
                 source_for_db,
                 encrypted_i,
                 storage_path,
+                extract_status_for_db,
+                extract_updated_at_for_db,
+                extract_attempt_for_db,
             ],
         )
         .map_err(|e| AppError::Db(e.to_string()))?;
@@ -628,7 +649,7 @@ async fn search(
     let tenant_id_db = tenant_id.clone();
     let items = with_conn(&state, move |conn| -> Result<Vec<FileMeta>, AppError> {
         let mut sql = String::from(
-            "SELECT file_id, tenant_id, session_id, filename, mime, size, sha256, created_at_ms, source, encrypted
+            "SELECT file_id, tenant_id, session_id, filename, mime, size, sha256, created_at_ms, source, encrypted, extract_status, extract_updated_at_ms, extract_attempt, extract_error, annotations_json
              FROM files WHERE tenant_id=?1 AND deleted_at_ms IS NULL",
         );
         let mut args: Vec<rusqlite::types::Value> = vec![tenant_id_db.clone().into()];
@@ -657,6 +678,10 @@ async fn search(
             .map_err(|e| AppError::Db(e.to_string()))?;
         let mut out = Vec::new();
         while let Some(row) = rows.next().map_err(|e| AppError::Db(e.to_string()))? {
+            let annotations_raw: Option<String> = row.get(14).ok();
+            let annotations = annotations_raw
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
             out.push(FileMeta {
                 file_id: row.get(0).map_err(|e| AppError::Db(e.to_string()))?,
                 tenant_id: row.get(1).map_err(|e| AppError::Db(e.to_string()))?,
@@ -671,6 +696,11 @@ async fn search(
                     let v: i64 = row.get(9).map_err(|e| AppError::Db(e.to_string()))?;
                     v != 0
                 },
+                extract_status: row.get(10).ok(),
+                extract_updated_at_ms: row.get(11).ok(),
+                extract_attempt: row.get(12).ok(),
+                extract_error: row.get(13).ok(),
+                annotations,
             });
         }
         Ok(out)
@@ -701,7 +731,7 @@ async fn meta(
     let out = with_conn(&state, move |conn| -> Result<Option<FileMeta>, AppError> {
         let mut stmt = conn
             .prepare(
-                "SELECT file_id, tenant_id, session_id, filename, mime, size, sha256, created_at_ms, source, encrypted
+                "SELECT file_id, tenant_id, session_id, filename, mime, size, sha256, created_at_ms, source, encrypted, extract_status, extract_updated_at_ms, extract_attempt, extract_error, annotations_json
                  FROM files WHERE tenant_id=?1 AND file_id=?2 AND deleted_at_ms IS NULL",
             )
             .map_err(|e| AppError::Db(e.to_string()))?;
@@ -709,6 +739,10 @@ async fn meta(
             .query(params![tenant_id_db, file_id])
             .map_err(|e| AppError::Db(e.to_string()))?;
         if let Some(row) = rows.next().map_err(|e| AppError::Db(e.to_string()))? {
+            let annotations_raw: Option<String> = row.get(14).ok();
+            let annotations = annotations_raw
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
             return Ok(Some(FileMeta {
                 file_id: row.get(0).map_err(|e| AppError::Db(e.to_string()))?,
                 tenant_id: row.get(1).map_err(|e| AppError::Db(e.to_string()))?,
@@ -723,6 +757,11 @@ async fn meta(
                     let v: i64 = row.get(9).map_err(|e| AppError::Db(e.to_string()))?;
                     v != 0
                 },
+                extract_status: row.get(10).ok(),
+                extract_updated_at_ms: row.get(11).ok(),
+                extract_attempt: row.get(12).ok(),
+                extract_error: row.get(13).ok(),
+                annotations,
             }));
         }
         Ok(None)
