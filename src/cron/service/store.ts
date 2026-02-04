@@ -135,14 +135,6 @@ export async function ensureLoaded(state: CronServiceState, opts?: { forceReload
     return;
   }
 
-  if (opts?.forceReload && state.store) {
-    // Only pay for the stat when we're explicitly checking for external edits.
-    const mtime = await getFileMtimeMs(state.deps.storePath);
-    if (mtime !== null && state.storeFileMtimeMs !== null && mtime === state.storeFileMtimeMs) {
-      return; // File unchanged since our last load/persist.
-    }
-  }
-
   const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
   const loaded = await loadCronStore(state.deps.storePath);
   const jobs = (loaded.jobs ?? []) as unknown as Array<Record<string, unknown>>;
