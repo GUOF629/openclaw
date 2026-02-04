@@ -791,6 +791,7 @@ export function createApi(params: {
     const out = await params.forgetQueue.exportFailed({ file, key, limit });
     await appendAuditLog(params.cfg, {
       action: "queue_failed_export",
+      queueKind: "forget",
       file: file?.trim() || undefined,
       key: key?.trim() || undefined,
       limit,
@@ -829,6 +830,7 @@ export function createApi(params: {
       if (dryRun) {
         await appendAuditLog(params.cfg, {
           action: "queue_failed_retry",
+          queueKind: "forget",
           dryRun: true,
           file,
           requester: {
@@ -842,6 +844,7 @@ export function createApi(params: {
       const out = await params.forgetQueue.retryFailed({ file });
       await appendAuditLog(params.cfg, {
         action: "queue_failed_retry",
+        queueKind: "forget",
         dryRun: false,
         file,
         requester: {
@@ -863,6 +866,7 @@ export function createApi(params: {
       const out = await params.forgetQueue.retryFailedByKey({ key, limit, dryRun });
       await appendAuditLog(params.cfg, {
         action: "queue_failed_retry",
+        queueKind: "forget",
         dryRun,
         key,
         limit,
@@ -909,6 +913,7 @@ export function createApi(params: {
     const out = await params.queue.exportFailed({ file, key, limit });
     await appendAuditLog(params.cfg, {
       action: "queue_failed_export",
+      queueKind: "update",
       file: file?.trim() || undefined,
       key: key?.trim() || undefined,
       limit,
@@ -956,6 +961,7 @@ export function createApi(params: {
       if (dryRun) {
         await appendAuditLog(params.cfg, {
           action: "queue_failed_retry",
+          queueKind: "update",
           dryRun: true,
           file,
           requester: {
@@ -969,6 +975,7 @@ export function createApi(params: {
       const out = await params.queue.retryFailed({ file });
       await appendAuditLog(params.cfg, {
         action: "queue_failed_retry",
+        queueKind: "update",
         dryRun: false,
         file,
         requester: {
@@ -990,6 +997,7 @@ export function createApi(params: {
       const out = await params.queue.retryFailedByKey({ key, limit, dryRun });
       await appendAuditLog(params.cfg, {
         action: "queue_failed_retry",
+        queueKind: "update",
         dryRun,
         key,
         limit,

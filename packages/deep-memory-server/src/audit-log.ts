@@ -9,6 +9,8 @@ export type AuditRequester = {
   keyId?: string;
 };
 
+type QueueKind = "update" | "forget";
+
 type ForgetAuditEntry = {
   id: string;
   ts: string;
@@ -37,6 +39,11 @@ type QueueFailedExportAuditEntry = {
   id: string;
   ts: string;
   action: "queue_failed_export";
+  /**
+   * Disambiguates update queue vs forget queue, since both share the same
+   * admin endpoints shape but act on different durable queues.
+   */
+  queueKind?: QueueKind;
   file?: string;
   key?: string;
   limit?: number;
@@ -47,6 +54,11 @@ type QueueFailedRetryAuditEntry = {
   id: string;
   ts: string;
   action: "queue_failed_retry";
+  /**
+   * Disambiguates update queue vs forget queue, since both share the same
+   * admin endpoints shape but act on different durable queues.
+   */
+  queueKind?: QueueKind;
   dryRun: boolean;
   file?: string;
   key?: string;
