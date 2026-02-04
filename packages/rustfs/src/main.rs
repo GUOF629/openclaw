@@ -725,6 +725,8 @@ struct PathParams {
 struct PendingQuery {
     tenant_id: Option<String>,
     limit: Option<u32>,
+    // Re-lease "processing" jobs if stuck longer than this.
+    lease_ms: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -827,6 +829,9 @@ async fn pending_extract(
     assert_can_read(&auth)?;
     let tenant_id = auth.tenant_id;
     let limit = q.limit.unwrap_or(25).clamp(1, 200) as i64;
+    let lease_ms = q.lease_ms.unwrap_or(300_000).clamp(5_000, 86_400_000) as i64;
+    let now = now_ms();
+    let lease_before_ms = now - lease_ms;
 
     let tenant_id_db = tenant_id.clone();
     let items = with_conn(&state, move |conn| -> Result<Vec<FileMeta>, AppError> {
@@ -834,13 +839,17 @@ async fn pending_extract(
             .prepare(
                 "SELECT file_id, tenant_id, session_id, filename, mime, size, sha256, created_at_ms, source, encrypted, extract_status, extract_updated_at_ms, extract_attempt, extract_error, annotations_json
                  FROM files
-                 WHERE tenant_id=?1 AND deleted_at_ms IS NULL AND (extract_status IS NULL OR extract_status='pending')
+                 WHERE tenant_id=?1 AND deleted_at_ms IS NULL AND (
+                   extract_status IS NULL
+                   OR extract_status='pending'
+                   OR (extract_status='processing' AND COALESCE(extract_updated_at_ms, 0) <= ?3)
+                 )
                  ORDER BY created_at_ms ASC
                  LIMIT ?2",
             )
             .map_err(|e| AppError::Db(e.to_string()))?;
         let mut rows = stmt
-            .query(params![tenant_id_db, limit])
+            .query(params![tenant_id_db, limit, lease_before_ms])
             .map_err(|e| AppError::Db(e.to_string()))?;
         let mut out = Vec::new();
         while let Some(row) = rows.next().map_err(|e| AppError::Db(e.to_string()))? {
