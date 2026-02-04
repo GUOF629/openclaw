@@ -191,6 +191,32 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # RustFS worker (optional). Enable via:
+  # docker compose --profile rustfs --profile deep-memory-prod --profile rustfs-worker up -d
+  rustfs-worker:
+    profiles: ["rustfs-worker"]
+    build:
+      context: .
+      dockerfile: packages/rustfs-worker/Dockerfile
+    environment:
+      RUSTFS_BASE_URL: "http://rustfs:8099"
+      RUSTFS_API_KEY: "${OPENCLAW_RUSTFS_WORKER_API_KEY:-}"
+      RUSTFS_POLL_INTERVAL_MS: "${OPENCLAW_RUSTFS_WORKER_POLL_INTERVAL_MS:-5000}"
+      RUSTFS_LEASE_MS: "${OPENCLAW_RUSTFS_WORKER_LEASE_MS:-300000}"
+      RUSTFS_PENDING_LIMIT: "${OPENCLAW_RUSTFS_WORKER_PENDING_LIMIT:-25}"
+      RUSTFS_MAX_DOWNLOAD_BYTES: "${OPENCLAW_RUSTFS_WORKER_MAX_DOWNLOAD_BYTES:-2097152}"
+      DEEP_MEMORY_BASE_URL: "http://deep-memory-server-prod:8088"
+      DEEP_MEMORY_API_KEY: "${OPENCLAW_DEEPMEM_WORKER_API_KEY:-}"
+      DEEP_MEMORY_NAMESPACE: "${OPENCLAW_DEEPMEM_NAMESPACE:-}"
+      DEEP_MEMORY_ASYNC: "${OPENCLAW_DEEPMEM_WORKER_ASYNC:-true}"
+      DEEP_MEMORY_TIMEOUT_MS: "${OPENCLAW_DEEPMEM_WORKER_TIMEOUT_MS:-30000}"
+    depends_on:
+      rustfs:
+        condition: service_healthy
+      deep-memory-server-prod:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   qdrant_data:
   neo4j_data:

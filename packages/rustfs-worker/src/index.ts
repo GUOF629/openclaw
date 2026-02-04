@@ -40,8 +40,6 @@ const EnvSchema = z.object({
   DEEP_MEMORY_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
 });
 
-type Env = z.infer<typeof EnvSchema>;
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -52,7 +50,9 @@ function normalizeBaseUrl(url: string): string {
 
 function isSupportedTextLike(mime: string | undefined, filename: string): boolean {
   const m = (mime ?? "").toLowerCase().trim();
-  if (m.startsWith("text/")) return true;
+  if (m.startsWith("text/")) {
+    return true;
+  }
   if (
     m === "application/json" ||
     m === "application/xml" ||
@@ -115,11 +115,13 @@ async function fetchBytes(params: {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), params.timeoutMs);
   try {
+    const headers: Record<string, string> = {};
+    if (params.apiKey) {
+      headers["x-api-key"] = params.apiKey;
+    }
     const res = await fetch(params.url, {
       method: "GET",
-      headers: {
-        ...(params.apiKey ? { "x-api-key": params.apiKey } : {}),
-      },
+      headers,
       signal: ctrl.signal,
     });
     if (!res.ok) {
@@ -135,8 +137,12 @@ async function fetchBytes(params: {
     let total = 0;
     while (true) {
       const { value, done } = await reader.read();
-      if (done) break;
-      if (!value) continue;
+      if (done) {
+        break;
+      }
+      if (!value) {
+        continue;
+      }
       total += value.length;
       if (total > params.maxBytes) {
         chunks.push(value.slice(0, Math.max(0, params.maxBytes - (total - value.length))));
@@ -202,8 +208,9 @@ async function main(): Promise<void> {
   while (true) {
     try {
       const pendingUrl = new URL(`${rustfsBaseUrl}/v1/files/pending_extract`);
-      if (env.RUSTFS_TENANT_ID?.trim())
+      if (env.RUSTFS_TENANT_ID?.trim()) {
         pendingUrl.searchParams.set("tenant_id", env.RUSTFS_TENANT_ID.trim());
+      }
       pendingUrl.searchParams.set("limit", String(env.RUSTFS_PENDING_LIMIT));
       pendingUrl.searchParams.set("lease_ms", String(env.RUSTFS_LEASE_MS));
 
