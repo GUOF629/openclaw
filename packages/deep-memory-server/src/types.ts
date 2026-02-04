@@ -28,12 +28,85 @@ export type UpdateMemoryIndexRequest = {
   async?: boolean;
 };
 
-export type UpdateMemoryIndexResponse = {
-  status: "queued" | "processed" | "skipped" | "error";
-  memories_added: number;
-  memories_filtered: number;
-  error?: string;
+export type UpdateMemoryIndexResponse =
+  | {
+      status: "queued";
+      memories_added: 0;
+      memories_filtered: 0;
+      degraded?: {
+        mode: "delayed";
+        notBeforeMs: number;
+        delaySeconds: number;
+      };
+    }
+  | {
+      status: "processed";
+      memories_added: number;
+      memories_filtered: number;
+    }
+  | {
+      status: "skipped";
+      memories_added: 0;
+      memories_filtered: 0;
+      error: "namespace_write_disabled" | "sampled_out" | "throttled";
+    }
+  | {
+      status: "error";
+      memories_added: 0;
+      memories_filtered: 0;
+      error: string;
+    };
+
+export type OverloadResponse =
+  | {
+      error: "queue_overloaded";
+      pendingApprox: number;
+      retryAfterSeconds: number;
+    }
+  | {
+      error: "degraded_read_only";
+      pendingApprox: number;
+      retryAfterSeconds: number;
+    }
+  | {
+      error: "namespace_overloaded";
+      namespace: string;
+      active: number;
+      limit: number;
+    };
+
+export type ForgetRequest = {
+  namespace?: string;
+  memory_ids?: string[];
+  session_id?: string;
+  dry_run?: boolean;
+  async?: boolean;
 };
+
+export type ForgetResponse =
+  | {
+      status: "dry_run";
+      namespace: string;
+      request_id?: string;
+      delete_ids: number;
+      delete_session: number;
+    }
+  | {
+      status: "queued";
+      namespace: string;
+      request_id?: string;
+      key: string;
+      task_id: string;
+      delete_ids: number;
+      delete_session: number;
+    }
+  | {
+      status: "processed";
+      namespace: string;
+      request_id?: string;
+      deleted: number;
+      results: unknown;
+    };
 
 export type ExtractedEntity = {
   name: string;
