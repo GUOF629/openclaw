@@ -177,6 +177,33 @@ export function createFileSearchTool(options: {
     return null;
   }
   const deep = buildDeepMemoryClient(cfg, agentId);
+  const semanticCache = new Map<string, { expiresAt: number; value: Record<string, unknown> }>();
+  const semanticCacheTtlMs = 30_000;
+  const semanticMaxConcurrent = 4;
+
+  async function mapWithConcurrency<T, R>(
+    items: T[],
+    concurrency: number,
+    fn: (item: T) => Promise<R>,
+  ): Promise<R[]> {
+    const limit = Math.max(1, Math.min(16, Math.trunc(concurrency)));
+    const out: R[] = [];
+    let i = 0;
+    async function worker(): Promise<void> {
+      for (;;) {
+        const idx = i;
+        i += 1;
+        const item = items[idx];
+        if (!item) {
+          return;
+        }
+        out[idx] = await fn(item);
+      }
+    }
+    const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker());
+    await Promise.all(workers);
+    return out;
+  }
   return {
     label: "File Search",
     name: "file_search",
@@ -261,34 +288,42 @@ export function createFileSearchTool(options: {
 
         const semanticItems = out.items.slice(0, Math.max(1, Math.min(50, semanticMaxFiles)));
         const semanticIds = new Set(semanticItems.map((i) => i.file_id));
-        const decorated: Array<Record<string, unknown>> = [];
         const scoreOf = (v: unknown): number => {
           const score = (v as { semantic?: { score?: unknown } } | null | undefined)?.semantic
             ?.score;
           return typeof score === "number" ? score : 0;
         };
-        for (const item of out.items) {
-          if (!semanticIds.has(item.file_id)) {
-            decorated.push(item);
-            continue;
+        const now = Date.now();
+        for (const [key, entry] of semanticCache.entries()) {
+          if (entry.expiresAt <= now) {
+            semanticCache.delete(key);
           }
-          const dmSessionId = `rustfs:file:${item.file_id}`;
-          const retrieved = await deep.retrieveContext({
-            userInput,
-            sessionId: dmSessionId,
-            maxMemories: Math.max(1, Math.min(50, semanticMaxMemories)),
-          });
-          const context = (retrieved.context ?? "").trim();
-          const contextClamped =
-            context.length > semanticMaxChars ? context.slice(0, semanticMaxChars) : context;
-          const memories = Array.isArray(retrieved.memories) ? retrieved.memories : [];
-          const score = memories.reduce(
-            (acc, m) => acc + (typeof m.relevance === "number" ? m.relevance : 0),
-            0,
-          );
-          decorated.push({
-            ...item,
-            semantic: {
+        }
+
+        const semanticLookup = await mapWithConcurrency(
+          semanticItems,
+          semanticMaxConcurrent,
+          async (item) => {
+            const dmSessionId = `rustfs:file:${item.file_id}`;
+            const cacheKey = `${userInput}::${semanticMaxMemories}::${dmSessionId}`;
+            const cached = semanticCache.get(cacheKey);
+            if (cached && cached.expiresAt > Date.now()) {
+              return { fileId: item.file_id, semantic: cached.value };
+            }
+            const retrieved = await deep.retrieveContext({
+              userInput,
+              sessionId: dmSessionId,
+              maxMemories: Math.max(1, Math.min(50, semanticMaxMemories)),
+            });
+            const context = (retrieved.context ?? "").trim();
+            const contextClamped =
+              context.length > semanticMaxChars ? context.slice(0, semanticMaxChars) : context;
+            const memories = Array.isArray(retrieved.memories) ? retrieved.memories : [];
+            const score = memories.reduce(
+              (acc, m) => acc + (typeof m.relevance === "number" ? m.relevance : 0),
+              0,
+            );
+            const semantic = {
               deepMemorySessionId: dmSessionId,
               score,
               entities: Array.isArray(retrieved.entities) ? retrieved.entities.slice(0, 20) : [],
@@ -302,9 +337,34 @@ export function createFileSearchTool(options: {
                   importance: m.importance,
                   content: typeof m.content === "string" ? m.content.slice(0, 400) : undefined,
                 })),
-            },
-          });
+            } satisfies Record<string, unknown>;
+            semanticCache.set(cacheKey, {
+              value: semantic,
+              expiresAt: Date.now() + semanticCacheTtlMs,
+            });
+            return { fileId: item.file_id, semantic };
+          },
+        );
+
+        const semanticMap = new Map<string, Record<string, unknown>>();
+        for (const entry of semanticLookup) {
+          if (entry && entry.fileId && entry.semantic) {
+            semanticMap.set(entry.fileId, entry.semantic);
+          }
         }
+
+        const decorated: Array<Record<string, unknown>> = out.items.map((item) => {
+          if (!semanticIds.has(item.file_id)) {
+            return item as unknown as Record<string, unknown>;
+          }
+          const semantic = semanticMap.get(item.file_id);
+          return semantic
+            ? ({ ...(item as unknown as Record<string, unknown>), semantic } as Record<
+                string,
+                unknown
+              >)
+            : (item as unknown as Record<string, unknown>);
+        });
 
         const finalItems = rerank
           ? decorated.toSorted((a, b) => scoreOf(b) - scoreOf(a))
