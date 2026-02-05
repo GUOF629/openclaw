@@ -10,7 +10,11 @@ import type { DeepMemoryMetrics } from "./metrics.js";
 import type { Neo4jStore } from "./neo4j.js";
 import type { QdrantStore } from "./qdrant.js";
 import type { DeepMemoryRetriever } from "./retriever.js";
-import type { RetrieveContextResponse, UpdateMemoryIndexResponse } from "./types.js";
+import type {
+  InspectSessionResponse,
+  RetrieveContextResponse,
+  UpdateMemoryIndexResponse,
+} from "./types.js";
 import type { DeepMemoryUpdater } from "./updater.js";
 import { extractHintsFromText } from "./analyzer.js";
 import { appendAuditLog } from "./audit-log.js";
@@ -88,6 +92,13 @@ const ForgetSchema = z
       });
     }
   });
+
+const InspectSessionSchema = z.object({
+  namespace: z.string().optional(),
+  session_id: z.string(),
+  limit: z.number().int().positive().max(1000).optional(),
+  include_content: z.boolean().optional(),
+});
 
 export function createApi(params: {
   cfg: DeepMemoryServerConfig;
@@ -184,6 +195,7 @@ export function createApi(params: {
   app.use("/update_memory_index", authz.requireRole("write"));
   if (authz.required) {
     app.use("/retrieve_context", authz.requireRole("read"));
+    app.use("/session/inspect", authz.requireRole("read"));
   }
 
   const checkRateLimit = (c: import("hono").Context, route: string, limit: number) => {
@@ -452,6 +464,92 @@ export function createApi(params: {
         }
       }
     }
+  });
+
+  app.post("/session/inspect", async (c) => {
+    const rl = checkRateLimit(c, "/session/inspect", params.cfg.RATE_LIMIT_RETRIEVE_PER_WINDOW);
+    if (!rl.ok) {
+      return c.json({ error: "rate_limited" }, 429);
+    }
+    const body = await readJsonWithLimit<Record<string, unknown>>(c, {
+      limitBytes: params.cfg.MAX_BODY_BYTES,
+      fallback: {},
+    });
+    if (typeof body === "object" && body && "error" in body) {
+      return c.json(body, body.error === "payload_too_large" ? 413 : 400);
+    }
+    const parsed = InspectSessionSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "invalid_request", details: parsed.error.issues }, 400);
+    }
+    const req = parsed.data;
+    const namespace = req.namespace?.trim() || "default";
+    const nsCheck = authz.assertNamespace(c, namespace);
+    if (!nsCheck.ok) {
+      return c.json(nsCheck.body, nsCheck.status);
+    }
+    const limit = Math.max(1, Math.min(200, Math.trunc(req.limit ?? 100)));
+    const includeContent = req.include_content ?? false;
+
+    const items = await params.qdrant.listMemoriesBySession({
+      namespace,
+      sessionId: req.session_id,
+      limit,
+    });
+    const topicsFreq = new Map<string, number>();
+    const entitiesFreq = new Map<string, number>();
+    const memories = items.map((it) => {
+      const p = it.payload;
+      const topics = Array.isArray(p?.topics) ? p.topics : [];
+      const entities = Array.isArray(p?.entities) ? p.entities : [];
+      for (const t of topics) {
+        topicsFreq.set(t, (topicsFreq.get(t) ?? 0) + 1);
+      }
+      for (const e of entities) {
+        entitiesFreq.set(e, (entitiesFreq.get(e) ?? 0) + 1);
+      }
+      const contentRaw = typeof p?.content === "string" ? p.content : "";
+      const content = includeContent ? contentRaw.slice(0, 500) : undefined;
+      return {
+        id: it.id,
+        importance: typeof p?.importance === "number" ? p.importance : undefined,
+        created_at: typeof p?.created_at === "string" ? p.created_at : undefined,
+        content,
+        topics: topics.length > 0 ? topics.slice(0, 10) : undefined,
+        entities: entities.length > 0 ? entities.slice(0, 10) : undefined,
+      };
+    });
+    const topics = Array.from(topicsFreq.entries())
+      .toSorted((a, b) => b[1] - a[1])
+      .slice(0, 20)
+      .map(([name, frequency]) => ({ name, frequency }));
+    const entities = Array.from(entitiesFreq.entries())
+      .toSorted((a, b) => b[1] - a[1])
+      .slice(0, 20)
+      .map(([name, frequency]) => ({ name, frequency }));
+
+    const summary = includeContent
+      ? memories
+          .toSorted((a, b) => (b.importance ?? 0) - (a.importance ?? 0))
+          .slice(0, 3)
+          .map((m) => (m.content ?? "").trim())
+          .filter(Boolean)
+          .join("\n\n")
+          .slice(0, 1200) || undefined
+      : undefined;
+
+    const resp: InspectSessionResponse = {
+      namespace,
+      session_id: req.session_id,
+      totals: {
+        memories: items.length,
+      },
+      topics,
+      entities,
+      memories,
+      summary,
+    };
+    return c.json(resp);
   });
 
   app.post("/update_memory_index", async (c) => {

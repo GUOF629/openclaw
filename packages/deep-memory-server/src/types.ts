@@ -117,6 +117,32 @@ export type ForgetResponse =
       results: unknown;
     };
 
+export type InspectSessionRequest = {
+  namespace?: string;
+  session_id: string;
+  limit?: number;
+  include_content?: boolean;
+};
+
+export type InspectSessionResponse = {
+  namespace: string;
+  session_id: string;
+  totals: {
+    memories: number;
+  };
+  topics: Array<{ name: string; frequency: number }>;
+  entities: Array<{ name: string; frequency: number }>;
+  memories: Array<{
+    id: string;
+    importance?: number;
+    created_at?: string;
+    content?: string;
+    topics?: string[];
+    entities?: string[];
+  }>;
+  summary?: string;
+};
+
 export type ExtractedEntity = {
   name: string;
   type: "person" | "place" | "organization" | "project" | "concept" | "other";

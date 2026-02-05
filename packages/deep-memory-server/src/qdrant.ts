@@ -214,6 +214,60 @@ export class QdrantStore {
     });
   }
 
+  async listMemoriesBySession(params: {
+    namespace: string;
+    sessionId: string;
+    limit: number;
+  }): Promise<Array<{ id: string; payload?: QdrantMemoryPayload }>> {
+    const limit = Math.max(1, Math.min(1000, Math.trunc(params.limit)));
+    const points: Array<{ id: string; payload?: QdrantMemoryPayload }> = [];
+    let offset: unknown = undefined;
+    while (points.length < limit) {
+      const batch = Math.min(128, limit - points.length);
+      const res = await (
+        this.client as unknown as {
+          scroll: (
+            collection: string,
+            args: Record<string, unknown>,
+          ) => Promise<{ points?: unknown[]; next_page_offset?: unknown }>;
+        }
+      ).scroll(this.collection, {
+        limit: batch,
+        with_payload: true,
+        with_vector: false,
+        offset,
+        filter: {
+          must: [
+            { key: "namespace", match: { value: params.namespace } },
+            { key: "session_id", match: { value: params.sessionId } },
+          ],
+        },
+      });
+      const batchPoints = Array.isArray(res?.points) ? res.points : [];
+      for (const p of batchPoints) {
+        const po = p as { id?: unknown; payload?: unknown };
+        if (!po?.id) {
+          continue;
+        }
+        if (typeof po.id !== "string" && typeof po.id !== "number") {
+          continue;
+        }
+        points.push({
+          id: typeof po.id === "number" ? String(po.id) : po.id,
+          payload: (po.payload as QdrantMemoryPayload | undefined) ?? undefined,
+        });
+        if (points.length >= limit) {
+          break;
+        }
+      }
+      if (!res?.next_page_offset) {
+        break;
+      }
+      offset = res.next_page_offset;
+    }
+    return points;
+  }
+
   async countMemories(params?: { namespace?: string }): Promise<number> {
     const res = await this.client.count(this.collection, {
       exact: true,
