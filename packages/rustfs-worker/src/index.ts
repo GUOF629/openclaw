@@ -48,6 +48,63 @@ type ExtractionResultV1 = {
   };
 };
 
+function buildAnnotationsV1(params: {
+  file: RustFsFileMeta;
+  deepMemory: {
+    baseUrl: string;
+    namespace?: string;
+    sessionId: string;
+    updateResponse?: unknown;
+    error?: string;
+    overloaded?: boolean;
+  };
+  extraction: ExtractionResultV1;
+}): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    // Keep legacy fields for compatibility; downstream can migrate gradually.
+    rustfs_worker: {
+      version: 1,
+      indexed_at_ms: Date.now(),
+      deep_memory: {
+        base_url: params.deepMemory.baseUrl,
+        namespace: params.deepMemory.namespace,
+        session_id: params.deepMemory.sessionId,
+        update_response: params.deepMemory.updateResponse,
+        error: params.deepMemory.error,
+        overloaded: params.deepMemory.overloaded,
+      },
+      extract: {
+        mime: params.file.mime ?? undefined,
+        bytes: params.extraction.stats.bytes,
+        truncated: params.extraction.stats.truncated,
+        segments: params.extraction.segments.length,
+        doc_type_guess: params.extraction.docTypeGuess,
+        language_guess: params.extraction.languageGuess,
+        warnings: params.extraction.warnings,
+      },
+    },
+    extraction: {
+      status: params.deepMemory.error ? "error" : "indexed",
+      extractor: "rustfs-worker:textlike:v1",
+      attempt: params.file.extract_attempt ?? undefined,
+      last_error: params.deepMemory.error ?? undefined,
+      warnings: params.extraction.warnings,
+      doc_type_guess: params.extraction.docTypeGuess,
+      language_guess: params.extraction.languageGuess,
+      segments: {
+        count: params.extraction.segments.length,
+      },
+      stats: params.extraction.stats,
+    },
+    deep_memory: {
+      session_id: params.deepMemory.sessionId,
+      namespace: params.deepMemory.namespace,
+      // Optional future fields: memory_ids/source_ref mappings.
+    },
+  };
+}
+
 const EnvSchema = z.object({
   RUSTFS_BASE_URL: z.string().min(1),
   RUSTFS_API_KEY: z.string().optional(),
@@ -576,19 +633,17 @@ async function main(): Promise<void> {
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             if (isOverloadLikeError(message)) {
-              const annotations = {
-                rustfs_worker: {
-                  version: 1,
-                  indexed_at_ms: Date.now(),
-                  deep_memory: {
-                    base_url: deepBaseUrl,
-                    namespace: env.DEEP_MEMORY_NAMESPACE?.trim() || undefined,
-                    session_id: sessionId,
-                    error: message,
-                    overloaded: true,
-                  },
+              const annotations = buildAnnotationsV1({
+                file,
+                deepMemory: {
+                  baseUrl: deepBaseUrl,
+                  namespace: env.DEEP_MEMORY_NAMESPACE?.trim() || undefined,
+                  sessionId,
+                  error: message,
+                  overloaded: true,
                 },
-              };
+                extraction,
+              });
               await fetchJson({
                 url: `${rustfsBaseUrl}/v1/files/${encodeURIComponent(file.file_id)}/annotations`,
                 method: "POST",
@@ -602,29 +657,16 @@ async function main(): Promise<void> {
             throw err;
           }
 
-          const annotations = {
-            rustfs_worker: {
-              version: 1,
-              indexed_at_ms: Date.now(),
-              deep_memory: {
-                base_url: deepBaseUrl,
-                namespace: env.DEEP_MEMORY_NAMESPACE?.trim() || undefined,
-                session_id: sessionId,
-                update_response: updateRes,
-              },
-              extract: {
-                mime: file.mime ?? undefined,
-                bytes: bytes.length,
-                truncated,
-                segments: extraction.segments.length,
-                chunk_max_chars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
-                chunk_overlap_chars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
-                doc_type_guess: extraction.docTypeGuess,
-                language_guess: extraction.languageGuess,
-                warnings: extraction.warnings,
-              },
+          const annotations = buildAnnotationsV1({
+            file,
+            deepMemory: {
+              baseUrl: deepBaseUrl,
+              namespace: env.DEEP_MEMORY_NAMESPACE?.trim() || undefined,
+              sessionId,
+              updateResponse: updateRes,
             },
-          };
+            extraction,
+          });
 
           await fetchJson({
             url: `${rustfsBaseUrl}/v1/files/${encodeURIComponent(file.file_id)}/annotations`,
