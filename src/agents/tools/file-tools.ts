@@ -78,7 +78,17 @@ function buildClarify(params: { candidates: FileSearchCandidate[]; includeSemant
       questions.push("语义证据较弱。你能提供更明确的项目/主题/关键词，或文件的大致名称吗？");
     } else if (s2 > 0 && s1 - s2 <= Math.max(0.15 * s1, 0.5)) {
       reasons.push("close_semantic_scores");
-      questions.push("前两个候选相关性接近。你更倾向哪一个（按 n 选择），或说出你要的具体内容点？");
+      const tTopics = (top?.semanticTopics ?? []).slice(0, 3).join("、");
+      const sTopics = (second?.semanticTopics ?? []).slice(0, 3).join("、");
+      if (tTopics || sTopics) {
+        questions.push(
+          `前两个候选相关性接近。候选1主题：${tTopics || "（无）"}；候选2主题：${sTopics || "（无）"}。你更倾向哪一个（按 n 选择）？`,
+        );
+      } else {
+        questions.push(
+          "前两个候选相关性接近。你更倾向哪一个（按 n 选择），或说出你要的具体内容点？",
+        );
+      }
     }
   }
 
