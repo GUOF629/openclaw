@@ -182,6 +182,25 @@ function isHtmlLike(mime: string | undefined, filename: string): boolean {
   return lower.endsWith(".html") || lower.endsWith(".htm") || lower.endsWith(".xhtml");
 }
 
+function isCodeLike(_mime: string | undefined, filename: string): boolean {
+  const lang = guessLanguage(filename);
+  if (!lang) {
+    return false;
+  }
+  return [
+    "typescript",
+    "javascript",
+    "python",
+    "go",
+    "rust",
+    "java",
+    "kotlin",
+    "swift",
+    "css",
+    "shell",
+  ].includes(lang);
+}
+
 function decodeHtmlEntities(input: string): string {
   return input
     .replaceAll("&nbsp;", " ")
@@ -517,6 +536,141 @@ function extractTextLike(params: {
   };
 }
 
+function extractCodeLike(params: {
+  file: RustFsFileMeta;
+  code: string;
+  bytes: number;
+  truncated: boolean;
+  chunkMaxChars: number;
+  chunkOverlapChars: number;
+}): ExtractionResultV1 {
+  const warnings: string[] = [];
+  const lang = guessLanguage(params.file.filename);
+  const code = params.code.replace(/\r\n/g, "\n");
+  const lines = code.split("\n");
+
+  const boundaryPatterns: Array<{ lang?: string; re: RegExp }> = [
+    { lang: "python", re: /^\s*(def|class)\s+[A-Za-z0-9_]+\s*\(/ },
+    { lang: "go", re: /^\s*func\s+(\([^)]+\)\s*)?[A-Za-z0-9_]+\s*\(/ },
+    { lang: "rust", re: /^\s*(pub\s+)?(async\s+)?fn\s+[A-Za-z0-9_]+\s*\(/ },
+    {
+      lang: "java",
+      re: /^\s*(public|private|protected)?\s*(static\s+)?(class|interface)\s+[A-Za-z0-9_]+/,
+    },
+    {
+      lang: "typescript",
+      re: /^\s*(export\s+)?(async\s+)?(function|class|interface|type)\s+[A-Za-z0-9_]+/,
+    },
+    {
+      lang: "javascript",
+      re: /^\s*(export\s+)?(async\s+)?(function|class)\s+[A-Za-z0-9_]+/,
+    },
+  ];
+
+  const chosen = boundaryPatterns.filter((p) => !p.lang || p.lang === lang);
+  const isBoundary = (line: string): boolean => chosen.some((p) => p.re.test(line));
+
+  const maxChars = Math.max(500, params.chunkMaxChars);
+  const overlap = Math.max(0, Math.min(params.chunkOverlapChars, Math.max(0, maxChars - 100)));
+
+  const segments: ExtractionSegmentV1[] = [];
+  let buf: string[] = [];
+  let bufStartLine = 0;
+
+  const flush = (endLineExclusive: number) => {
+    const text = buf.join("\n").trimEnd();
+    if (!text.trim()) {
+      buf = [];
+      bufStartLine = endLineExclusive;
+      return;
+    }
+    // If a block is still too large, fall back to char-based split.
+    if (text.length > maxChars) {
+      const chunks = splitIntoChunks({ text, maxChars, overlapChars: overlap });
+      for (let i = 0; i < chunks.length; i += 1) {
+        const c = chunks[i];
+        if (!c) {
+          continue;
+        }
+        segments.push({
+          text: c.text,
+          locator: {
+            kind: "section",
+            index: 0,
+            total: 0,
+            label: `lines ${bufStartLine + 1}-${endLineExclusive}`,
+          },
+        });
+      }
+    } else {
+      segments.push({
+        text,
+        locator: {
+          kind: "section",
+          index: 0,
+          total: 0,
+          label: `lines ${bufStartLine + 1}-${endLineExclusive}`,
+        },
+      });
+    }
+    buf = [];
+    bufStartLine = endLineExclusive;
+  };
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    if (buf.length === 0) {
+      bufStartLine = i;
+    }
+    // Start a new segment at structural boundaries (best-effort).
+    if (buf.length > 0 && isBoundary(line) && buf.join("\n").length >= Math.floor(maxChars * 0.6)) {
+      flush(i);
+    }
+    buf.push(line);
+    if (buf.join("\n").length >= maxChars) {
+      flush(i + 1);
+    }
+  }
+  if (buf.length > 0) {
+    flush(lines.length);
+  }
+
+  if (segments.length === 0 && code.trim()) {
+    warnings.push("code_chunking_failed_fallback_to_textlike");
+    return extractTextLike({
+      file: params.file,
+      text: code,
+      bytes: params.bytes,
+      truncated: params.truncated,
+      chunkMaxChars: params.chunkMaxChars,
+      chunkOverlapChars: params.chunkOverlapChars,
+    });
+  }
+
+  for (let i = 0; i < segments.length; i += 1) {
+    const seg = segments[i];
+    if (!seg?.locator) {
+      continue;
+    }
+    seg.locator.index = i + 1;
+    seg.locator.total = segments.length;
+  }
+
+  return {
+    schema_version: 1,
+    docTypeGuess: "code",
+    languageGuess: lang,
+    segments,
+    warnings,
+    stats: {
+      bytes: params.bytes,
+      chars: code.length,
+      segments: segments.length,
+      truncated: params.truncated,
+    },
+  };
+}
+
 function buildDeepMemoryMessages(params: {
   file: RustFsFileMeta;
   extraction: ExtractionResultV1;
@@ -710,7 +864,8 @@ async function main(): Promise<void> {
         try {
           const canText = isSupportedTextLike(file.mime ?? undefined, file.filename);
           const canHtml = isHtmlLike(file.mime ?? undefined, file.filename);
-          if (!canText && !canHtml) {
+          const canCode = isCodeLike(file.mime ?? undefined, file.filename);
+          if (!canText && !canHtml && !canCode) {
             await fetchJson({
               url: `${rustfsBaseUrl}/v1/files/${encodeURIComponent(file.file_id)}/extract_status`,
               method: "POST",
@@ -741,14 +896,23 @@ async function main(): Promise<void> {
                 chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
                 chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
               })
-            : extractTextLike({
-                file,
-                text,
-                bytes: bytes.length,
-                truncated,
-                chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
-                chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
-              });
+            : canCode
+              ? extractCodeLike({
+                  file,
+                  code: text,
+                  bytes: bytes.length,
+                  truncated,
+                  chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
+                  chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
+                })
+              : extractTextLike({
+                  file,
+                  text,
+                  bytes: bytes.length,
+                  truncated,
+                  chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
+                  chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
+                });
           if (extraction.segments.length === 0) {
             await fetchJson({
               url: `${rustfsBaseUrl}/v1/files/${encodeURIComponent(file.file_id)}/extract_status`,
