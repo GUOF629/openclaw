@@ -27,6 +27,76 @@ type FileSearchCandidate = {
   semanticContext?: string;
 };
 
+function buildClarify(params: { candidates: FileSearchCandidate[]; includeSemantic: boolean }):
+  | {
+      required: boolean;
+      reasons: string[];
+      questions: string[];
+    }
+  | undefined {
+  const c = params.candidates;
+  if (c.length === 0) {
+    return {
+      required: false,
+      reasons: ["no_candidates"],
+      questions: ["没找到匹配文件。你能补充文件类型、时间范围、或更具体的关键词吗？"],
+    };
+  }
+
+  const reasons: string[] = [];
+  const questions: string[] = [];
+
+  // Same filename ambiguity.
+  const byName = new Map<string, FileSearchCandidate[]>();
+  for (const it of c) {
+    const key = (it.filename ?? "").trim().toLowerCase();
+    if (!key) {
+      continue;
+    }
+    const arr = byName.get(key) ?? [];
+    arr.push(it);
+    byName.set(key, arr);
+  }
+  for (const [name, arr] of byName.entries()) {
+    if (arr.length >= 2) {
+      reasons.push("duplicate_filename");
+      questions.push(
+        `发现多个同名文件 \`${name}\`。你要哪一个（按 n 选择），或提供更具体的会话/时间线索？`,
+      );
+      break;
+    }
+  }
+
+  if (params.includeSemantic && c.length >= 2) {
+    const top = c[0];
+    const second = c[1];
+    const s1 = typeof top?.semanticScore === "number" ? top.semanticScore : 0;
+    const s2 = typeof second?.semanticScore === "number" ? second.semanticScore : 0;
+    if (s1 <= 0) {
+      reasons.push("weak_semantic_evidence");
+      questions.push("语义证据较弱。你能提供更明确的项目/主题/关键词，或文件的大致名称吗？");
+    } else if (s2 > 0 && s1 - s2 <= Math.max(0.15 * s1, 0.5)) {
+      reasons.push("close_semantic_scores");
+      questions.push("前两个候选相关性接近。你更倾向哪一个（按 n 选择），或说出你要的具体内容点？");
+    }
+  }
+
+  // If multiple candidates and no disambiguation info, encourage choosing by n.
+  if (c.length >= 2) {
+    reasons.push("multiple_candidates");
+    questions.push("请从 candidates 里回复 n（或 fileId）确认要发送的文件。");
+  }
+
+  if (reasons.length === 0) {
+    return undefined;
+  }
+  return {
+    required: true,
+    reasons: Array.from(new Set(reasons)),
+    questions: Array.from(new Set(questions)).slice(0, 5),
+  };
+}
+
 function readIngestHintsFromAnnotations(annotations: unknown): {
   tags?: string[];
   kind?: string;
@@ -370,11 +440,15 @@ export function createFileSearchTool(options: {
           ? decorated.toSorted((a, b) => scoreOf(b) - scoreOf(a))
           : decorated;
 
+        const candidates = buildCandidates(finalItems);
+        const clarify = buildClarify({ candidates, includeSemantic });
+
         return jsonResult({
           ok: true,
           items: finalItems,
-          candidates: buildCandidates(finalItems),
+          candidates,
           semantic: { ok: true },
+          clarify,
           selection: {
             required: true,
             message:
