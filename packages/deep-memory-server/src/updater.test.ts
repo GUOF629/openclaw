@@ -136,4 +136,80 @@ describe("DeepMemoryUpdater", () => {
     expect(existingPayload.namespace).toBe("default");
     expect(existingPayload.frequency).toBe(4);
   });
+
+  it("can optionally return memory ids for traceability", async () => {
+    const analyzer = {
+      analyze: () => ({
+        entities: [],
+        topics: [],
+        events: [],
+        drafts: [
+          {
+            content: "important memory that should be stored",
+            entities: [],
+            topics: [],
+            createdAt: new Date().toISOString(),
+            signals: { frequency: 2, user_intent: 1, length: 120 },
+          },
+          {
+            content: "another important memory",
+            entities: [],
+            topics: [],
+            createdAt: new Date().toISOString(),
+            signals: { frequency: 2, user_intent: 1, length: 120 },
+          },
+        ],
+        filtered: { added: 2, filtered: 0 },
+      }),
+    };
+    const embedder = { embed: async () => [0, 0, 0] };
+    const qdrant = {
+      search: async () => [],
+      getMemory: async () => null,
+      upsertMemory: async () => {},
+    };
+    const neo4j = {
+      upsertSession: async () => {},
+      getSessionIngestMeta: async () => ({}),
+      setSessionIngestMeta: async () => {},
+      upsertTopic: async () => {},
+      linkSessionTopic: async () => {},
+      upsertEntity: async () => {},
+      linkTopicEntity: async () => {},
+      upsertEvent: async () => {},
+      eventId: () => "e1",
+      linkSessionEvent: async () => {},
+      linkEventTopic: async () => {},
+      linkEventEntity: async () => {},
+      upsertMemory: async () => {},
+      linkMemoryTopic: async () => {},
+      linkMemoryEntity: async () => {},
+      linkMemoryRelated: async () => {},
+    };
+
+    const updater = new DeepMemoryUpdater({
+      analyzer: analyzer as unknown as never,
+      embedder: embedder as unknown as never,
+      qdrant: qdrant as unknown as never,
+      neo4j: neo4j as unknown as never,
+      minSemanticScore: 0,
+      importanceThreshold: 0.1,
+      maxMemoriesPerUpdate: 20,
+      dedupeScore: 0.92,
+      relatedTopK: 0,
+      sensitiveFilterEnabled: false,
+    });
+
+    const out = await updater.update({
+      namespace: "default",
+      sessionId: "s-trace",
+      messages: [],
+      returnMemoryIds: { max: 1 },
+    });
+
+    expect(out.status).toBe("processed");
+    expect(Array.isArray((out as Record<string, unknown>).memory_ids)).toBe(true);
+    expect(((out as Record<string, unknown>).memory_ids as unknown[]).length).toBe(1);
+    expect((out as Record<string, unknown>).memory_ids_truncated).toBe(true);
+  });
 });
