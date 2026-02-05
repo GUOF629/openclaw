@@ -44,6 +44,10 @@ const EnvSchema = z.object({
   DEEP_MEMORY_NAMESPACE: z.string().optional(),
   DEEP_MEMORY_ASYNC: z.coerce.boolean().default(true),
   DEEP_MEMORY_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+
+  // Chunking: convert extracted text into multiple messages for better semantic indexing.
+  DEEP_MEMORY_CHUNK_MAX_CHARS: z.coerce.number().int().positive().default(3500),
+  DEEP_MEMORY_CHUNK_OVERLAP_CHARS: z.coerce.number().int().nonnegative().default(200),
 });
 
 function sleep(ms: number): Promise<void> {
@@ -168,10 +172,35 @@ async function fetchBytes(params: {
   }
 }
 
+function splitIntoChunks(params: {
+  text: string;
+  maxChars: number;
+  overlapChars: number;
+}): Array<{ text: string; truncated: boolean }> {
+  const maxChars = Math.max(200, params.maxChars);
+  const overlap = Math.max(0, Math.min(params.overlapChars, Math.max(0, maxChars - 50)));
+  const t = params.text;
+  if (!t.trim()) {
+    return [];
+  }
+  const chunks: Array<{ text: string; truncated: boolean }> = [];
+  let i = 0;
+  while (i < t.length) {
+    const end = Math.min(t.length, i + maxChars);
+    const slice = t.slice(i, end);
+    chunks.push({ text: slice, truncated: end < t.length });
+    if (end >= t.length) {
+      break;
+    }
+    i = Math.max(0, end - overlap);
+  }
+  return chunks;
+}
+
 function buildDeepMemoryMessages(params: {
   file: RustFsFileMeta;
-  text: string;
   truncated: boolean;
+  chunks: Array<{ text: string; truncated: boolean }>;
 }): unknown[] {
   const header = [
     "FILE_CONTEXT",
@@ -185,8 +214,11 @@ function buildDeepMemoryMessages(params: {
     `created_at_ms: ${params.file.created_at_ms}`,
     `truncated: ${params.truncated}`,
   ].join("\n");
-  const content = `${header}\n\nCONTENT_EXCERPT\n${params.text}`;
-  return [{ role: "user", content }];
+  const total = params.chunks.length;
+  return params.chunks.map((c, idx) => {
+    const content = `${header}\nchunk: ${idx + 1}/${total}\nchunk_truncated: ${c.truncated}\n\nCONTENT_EXCERPT\n${c.text}`;
+    return { role: "user", content };
+  });
 }
 
 const WorkerStateSchema = z.object({
@@ -353,7 +385,23 @@ async function main(): Promise<void> {
           const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
 
           const sessionId = `rustfs:file:${file.file_id}`;
-          const messages = buildDeepMemoryMessages({ file, text, truncated });
+          const chunks = splitIntoChunks({
+            text,
+            maxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
+            overlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
+          });
+          if (chunks.length === 0) {
+            await fetchJson({
+              url: `${rustfsBaseUrl}/v1/files/${encodeURIComponent(file.file_id)}/extract_status`,
+              method: "POST",
+              apiKey: env.RUSTFS_API_KEY,
+              timeoutMs: env.DEEP_MEMORY_TIMEOUT_MS,
+              body: { status: "skipped", error: "empty_text" },
+            });
+            fileLog.info({ sessionId }, "skipped empty text");
+            continue;
+          }
+          const messages = buildDeepMemoryMessages({ file, truncated, chunks });
           const updateRes = await fetchJson<unknown>({
             url: `${deepBaseUrl}/update_memory_index`,
             method: "POST",
@@ -381,6 +429,9 @@ async function main(): Promise<void> {
                 mime: file.mime ?? undefined,
                 bytes: bytes.length,
                 truncated,
+                chunks: chunks.length,
+                chunk_max_chars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
+                chunk_overlap_chars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
               },
             },
           };
