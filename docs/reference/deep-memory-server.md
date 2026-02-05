@@ -140,6 +140,8 @@ Overload (503):
 
 Returns a session-level summary without requiring `user_input`.
 
+This endpoint is used by higher-level features (for example, RustFS-backed `file_search`) to obtain stable, query-independent semantics (topics/entities) for a session.
+
 Request body:
 
 - `namespace` (optional)
