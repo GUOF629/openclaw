@@ -1196,6 +1196,9 @@ async function main(): Promise<void> {
     }
   }
 
+  let overloadHits = 0;
+  let lastEmptyLogAt = 0;
+
   while (true) {
     try {
       const pending = await fetchJson<{
@@ -1223,6 +1226,18 @@ async function main(): Promise<void> {
       }
 
       if (items.length === 0) {
+        const now = Date.now();
+        if (now - lastEmptyLogAt > 60_000) {
+          lastEmptyLogAt = now;
+          log.debug(
+            {
+              pollIntervalMs: env.RUSTFS_POLL_INTERVAL_MS,
+              tombstoneSinceMs,
+              overloadHits,
+            },
+            "no pending files to extract",
+          );
+        }
         await sleep(env.RUSTFS_POLL_INTERVAL_MS);
         continue;
       }
@@ -1230,6 +1245,7 @@ async function main(): Promise<void> {
       for (const file of items) {
         const fileLog = log.child({ file_id: file.file_id, filename: file.filename });
         try {
+          const t0 = Date.now();
           const canText = isSupportedTextLike(file.mime ?? undefined, file.filename);
           const canHtml = isHtmlLike(file.mime ?? undefined, file.filename);
           const canCode = isCodeLike(file.mime ?? undefined, file.filename);
@@ -1248,12 +1264,14 @@ async function main(): Promise<void> {
             continue;
           }
 
+          const tDownload0 = Date.now();
           const bytes = await fetchBytes({
             url: `${rustfsBaseUrl}/v1/files/${encodeURIComponent(file.file_id)}`,
             apiKey: env.RUSTFS_API_KEY,
             timeoutMs: env.DEEP_MEMORY_TIMEOUT_MS,
             maxBytes: env.RUSTFS_MAX_DOWNLOAD_BYTES,
           });
+          const downloadMs = Date.now() - tDownload0;
           const truncated = bytes.length >= env.RUSTFS_MAX_DOWNLOAD_BYTES;
           const text =
             canText || canHtml || canCode
@@ -1261,6 +1279,7 @@ async function main(): Promise<void> {
               : "";
 
           const sessionId = `rustfs:file:${file.file_id}`;
+          const tExtract0 = Date.now();
           const extraction = canPdf
             ? await extractPdfLike({
                 file,
@@ -1311,6 +1330,7 @@ async function main(): Promise<void> {
                         chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
                         chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
                       });
+          const extractMs = Date.now() - tExtract0;
           if (extraction.segments.length === 0) {
             await fetchJson({
               url: `${rustfsBaseUrl}/v1/files/${encodeURIComponent(file.file_id)}/extract_status`,
@@ -1322,8 +1342,11 @@ async function main(): Promise<void> {
             fileLog.info({ sessionId }, "skipped empty text");
             continue;
           }
+          const tMsg0 = Date.now();
           const messages = buildDeepMemoryMessages({ file, extraction });
+          const messageBuildMs = Date.now() - tMsg0;
           let updateRes: unknown;
+          const tDeep0 = Date.now();
           try {
             updateRes = await fetchJson<unknown>({
               url: `${deepBaseUrl}/update_memory_index`,
@@ -1340,6 +1363,7 @@ async function main(): Promise<void> {
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             if (isOverloadLikeError(message)) {
+              overloadHits += 1;
               const annotations = buildAnnotationsV1({
                 file,
                 existingAnnotations: file.annotations,
@@ -1364,7 +1388,9 @@ async function main(): Promise<void> {
             }
             throw err;
           }
+          const deepMemoryMs = Date.now() - tDeep0;
 
+          const tAnno0 = Date.now();
           const annotations = buildAnnotationsV1({
             file,
             existingAnnotations: file.annotations,
@@ -1391,8 +1417,27 @@ async function main(): Promise<void> {
             timeoutMs: env.DEEP_MEMORY_TIMEOUT_MS,
             body: { status: "indexed" },
           });
+          const rustfsWriteMs = Date.now() - tAnno0;
+          const totalMs = Date.now() - t0;
 
-          fileLog.info({ sessionId }, "indexed");
+          fileLog.info(
+            {
+              sessionId,
+              docType: extraction.docTypeGuess,
+              segments: extraction.segments.length,
+              bytes: extraction.stats.bytes,
+              truncated: extraction.stats.truncated,
+              timings: {
+                downloadMs,
+                extractMs,
+                messageBuildMs,
+                deepMemoryMs,
+                rustfsWriteMs,
+                totalMs,
+              },
+            },
+            "indexed",
+          );
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           await fetchJson({
