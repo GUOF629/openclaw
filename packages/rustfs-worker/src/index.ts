@@ -53,6 +53,7 @@ type ExtractionResultV1 = {
 
 function buildAnnotationsV1(params: {
   file: RustFsFileMeta;
+  existingAnnotations?: unknown;
   deepMemory: {
     baseUrl: string;
     namespace?: string;
@@ -63,8 +64,35 @@ function buildAnnotationsV1(params: {
   };
   extraction: ExtractionResultV1;
 }): Record<string, unknown> {
+  const base =
+    params.existingAnnotations && typeof params.existingAnnotations === "object"
+      ? { ...(params.existingAnnotations as Record<string, unknown>) }
+      : ({} as Record<string, unknown>);
+
+  const ingestRaw = base.openclaw_ingest;
+  const ingest =
+    ingestRaw && typeof ingestRaw === "object" && !Array.isArray(ingestRaw)
+      ? (ingestRaw as Record<string, unknown>)
+      : null;
+  const ingestKind = ingest && typeof ingest.kind === "string" ? ingest.kind.trim() : "";
+  const ingestHint = ingest && typeof ingest.hint === "string" ? ingest.hint.trim() : "";
+  const ingestTags =
+    ingest && Array.isArray(ingest.tags)
+      ? ingest.tags
+          .filter((t): t is string => typeof t === "string")
+          .map((t) => t.trim())
+          .filter(Boolean)
+          .slice(0, 50)
+      : undefined;
+
   return {
+    ...base,
     schema_version: 1,
+    classification: {
+      kind: ingestKind || undefined,
+      hint: ingestHint || undefined,
+      tags: ingestTags && ingestTags.length > 0 ? ingestTags : undefined,
+    },
     // Keep legacy fields for compatibility; downstream can migrate gradually.
     rustfs_worker: {
       version: 1,
@@ -1314,6 +1342,7 @@ async function main(): Promise<void> {
             if (isOverloadLikeError(message)) {
               const annotations = buildAnnotationsV1({
                 file,
+                existingAnnotations: file.annotations,
                 deepMemory: {
                   baseUrl: deepBaseUrl,
                   namespace: env.DEEP_MEMORY_NAMESPACE?.trim() || undefined,
@@ -1338,6 +1367,7 @@ async function main(): Promise<void> {
 
           const annotations = buildAnnotationsV1({
             file,
+            existingAnnotations: file.annotations,
             deepMemory: {
               baseUrl: deepBaseUrl,
               namespace: env.DEEP_MEMORY_NAMESPACE?.trim() || undefined,
