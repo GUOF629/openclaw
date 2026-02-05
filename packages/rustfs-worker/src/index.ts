@@ -22,6 +22,32 @@ type RustFsFileMeta = {
   annotations?: unknown;
 };
 
+type ExtractionSegmentV1 = {
+  text: string;
+  locator?: {
+    kind: "chunk" | "page" | "slide" | "section" | "unknown";
+    index: number; // 1-based
+    total: number;
+    startChar?: number;
+    endChar?: number;
+    label?: string;
+  };
+};
+
+type ExtractionResultV1 = {
+  schema_version: 1;
+  docTypeGuess: string;
+  languageGuess?: string;
+  segments: ExtractionSegmentV1[];
+  warnings: string[];
+  stats: {
+    bytes: number;
+    chars: number;
+    segments: number;
+    truncated: boolean;
+  };
+};
+
 const EnvSchema = z.object({
   RUSTFS_BASE_URL: z.string().min(1),
   RUSTFS_API_KEY: z.string().optional(),
@@ -88,6 +114,55 @@ function isSupportedTextLike(mime: string | undefined, filename: string): boolea
     lower.endsWith(".yml") ||
     lower.endsWith(".toml")
   );
+}
+
+function guessDocType(mime: string | undefined, filename: string): string {
+  const m = (mime ?? "").toLowerCase().trim();
+  const lower = filename.toLowerCase();
+  if (m.includes("markdown") || lower.endsWith(".md") || lower.endsWith(".markdown")) {
+    return "markdown";
+  }
+  if (m.includes("json") || lower.endsWith(".json") || lower.endsWith(".jsonl")) {
+    return "json";
+  }
+  if (m.includes("yaml") || lower.endsWith(".yaml") || lower.endsWith(".yml")) {
+    return "yaml";
+  }
+  if (m.includes("xml") || lower.endsWith(".xml")) {
+    return "xml";
+  }
+  if (m.startsWith("text/") || lower.endsWith(".txt")) {
+    return "text";
+  }
+  return m ? `mime:${m}` : "unknown";
+}
+
+function guessLanguage(filename: string): string | undefined {
+  const lower = filename.toLowerCase();
+  const ext = lower.split(".").pop() ?? "";
+  const map: Record<string, string> = {
+    ts: "typescript",
+    tsx: "typescript",
+    js: "javascript",
+    jsx: "javascript",
+    py: "python",
+    go: "go",
+    rs: "rust",
+    java: "java",
+    kt: "kotlin",
+    swift: "swift",
+    md: "markdown",
+    json: "json",
+    yaml: "yaml",
+    yml: "yaml",
+    toml: "toml",
+    xml: "xml",
+    html: "html",
+    htm: "html",
+    css: "css",
+    sh: "shell",
+  };
+  return map[ext];
 }
 
 async function fetchJson<T>(params: {
@@ -191,19 +266,20 @@ function splitIntoChunks(params: {
   text: string;
   maxChars: number;
   overlapChars: number;
-}): Array<{ text: string; truncated: boolean }> {
+}): Array<{ text: string; truncated: boolean; startChar: number; endChar: number }> {
   const maxChars = Math.max(200, params.maxChars);
   const overlap = Math.max(0, Math.min(params.overlapChars, Math.max(0, maxChars - 50)));
   const t = params.text;
   if (!t.trim()) {
     return [];
   }
-  const chunks: Array<{ text: string; truncated: boolean }> = [];
+  const chunks: Array<{ text: string; truncated: boolean; startChar: number; endChar: number }> =
+    [];
   let i = 0;
   while (i < t.length) {
     const end = Math.min(t.length, i + maxChars);
     const slice = t.slice(i, end);
-    chunks.push({ text: slice, truncated: end < t.length });
+    chunks.push({ text: slice, truncated: end < t.length, startChar: i, endChar: end });
     if (end >= t.length) {
       break;
     }
@@ -212,10 +288,47 @@ function splitIntoChunks(params: {
   return chunks;
 }
 
+function extractTextLike(params: {
+  file: RustFsFileMeta;
+  text: string;
+  bytes: number;
+  truncated: boolean;
+  chunkMaxChars: number;
+  chunkOverlapChars: number;
+}): ExtractionResultV1 {
+  const chunks = splitIntoChunks({
+    text: params.text,
+    maxChars: params.chunkMaxChars,
+    overlapChars: params.chunkOverlapChars,
+  });
+  const segments: ExtractionSegmentV1[] = chunks.map((c, idx) => ({
+    text: c.text,
+    locator: {
+      kind: "chunk",
+      index: idx + 1,
+      total: chunks.length,
+      startChar: c.startChar,
+      endChar: c.endChar,
+    },
+  }));
+  return {
+    schema_version: 1,
+    docTypeGuess: guessDocType(params.file.mime ?? undefined, params.file.filename),
+    languageGuess: guessLanguage(params.file.filename),
+    segments,
+    warnings: [],
+    stats: {
+      bytes: params.bytes,
+      chars: params.text.length,
+      segments: segments.length,
+      truncated: params.truncated,
+    },
+  };
+}
+
 function buildDeepMemoryMessages(params: {
   file: RustFsFileMeta;
-  truncated: boolean;
-  chunks: Array<{ text: string; truncated: boolean }>;
+  extraction: ExtractionResultV1;
 }): unknown[] {
   const header = [
     "FILE_CONTEXT",
@@ -227,11 +340,25 @@ function buildDeepMemoryMessages(params: {
     `sha256: ${params.file.sha256}`,
     `size: ${params.file.size}`,
     `created_at_ms: ${params.file.created_at_ms}`,
-    `truncated: ${params.truncated}`,
+    `doc_type_guess: ${params.extraction.docTypeGuess}`,
+    `language_guess: ${params.extraction.languageGuess ?? ""}`,
+    `truncated: ${params.extraction.stats.truncated}`,
   ].join("\n");
-  const total = params.chunks.length;
-  return params.chunks.map((c, idx) => {
-    const content = `${header}\nchunk: ${idx + 1}/${total}\nchunk_truncated: ${c.truncated}\n\nCONTENT_EXCERPT\n${c.text}`;
+
+  const total = params.extraction.segments.length;
+  return params.extraction.segments.map((seg, idx) => {
+    const loc = seg.locator;
+    const locLines = loc
+      ? [
+          `segment: ${idx + 1}/${total}`,
+          `locator_kind: ${loc.kind}`,
+          `locator_index: ${loc.index}/${loc.total}`,
+          `locator_label: ${loc.label ?? ""}`,
+          `start_char: ${loc.startChar ?? ""}`,
+          `end_char: ${loc.endChar ?? ""}`,
+        ].join("\n")
+      : `segment: ${idx + 1}/${total}`;
+    const content = `${header}\n${locLines}\n\nCONTENT_EXCERPT\n${seg.text}`;
     return { role: "user", content };
   });
 }
@@ -412,12 +539,15 @@ async function main(): Promise<void> {
           const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
 
           const sessionId = `rustfs:file:${file.file_id}`;
-          const chunks = splitIntoChunks({
+          const extraction = extractTextLike({
+            file,
             text,
-            maxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
-            overlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
+            bytes: bytes.length,
+            truncated,
+            chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
+            chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
           });
-          if (chunks.length === 0) {
+          if (extraction.segments.length === 0) {
             await fetchJson({
               url: `${rustfsBaseUrl}/v1/files/${encodeURIComponent(file.file_id)}/extract_status`,
               method: "POST",
@@ -428,7 +558,7 @@ async function main(): Promise<void> {
             fileLog.info({ sessionId }, "skipped empty text");
             continue;
           }
-          const messages = buildDeepMemoryMessages({ file, truncated, chunks });
+          const messages = buildDeepMemoryMessages({ file, extraction });
           let updateRes: unknown;
           try {
             updateRes = await fetchJson<unknown>({
@@ -486,9 +616,12 @@ async function main(): Promise<void> {
                 mime: file.mime ?? undefined,
                 bytes: bytes.length,
                 truncated,
-                chunks: chunks.length,
+                segments: extraction.segments.length,
                 chunk_max_chars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
                 chunk_overlap_chars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
+                doc_type_guess: extraction.docTypeGuess,
+                language_guess: extraction.languageGuess,
+                warnings: extraction.warnings,
               },
             },
           };
