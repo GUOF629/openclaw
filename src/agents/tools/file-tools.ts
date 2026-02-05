@@ -512,8 +512,8 @@ export function createFileSearchTool(options: {
 
             const semantic = {
               deepMemorySessionId: dmSessionId,
-              ...(inspectEvidence ?? {}),
-              ...(retrieveEvidence ?? {}),
+              ...inspectEvidence,
+              ...retrieveEvidence,
             } satisfies Record<string, unknown>;
 
             return { fileId: item.file_id, semantic };
