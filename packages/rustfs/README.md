@@ -43,6 +43,7 @@ Response:
 ### Extract jobs (worker)
 
 RustFS stores a per-file extraction/indexing status (`extract_status`) and optional `annotations` used by downstream semantic retrieval.
+Workers are expected to **merge** annotations (preserve `openclaw_ingest` hints) and may write a structured `schema_version=1` envelope for extraction + deep-memory traceability.
 
 #### Claim (recommended; atomic leasing)
 

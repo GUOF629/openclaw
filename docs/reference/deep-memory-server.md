@@ -125,6 +125,9 @@ Overload (503):
 Success (200):
 
 - processed: `{ "status": "processed", "memories_added": <n>, "memories_filtered": <n> }`
+  - Optional (only when `async=false` and `return_memory_ids=true`):
+    - `memory_ids`: string array (up to `max_memory_ids`, default 200)
+    - `memory_ids_truncated`: boolean (true if the list hit the max)
 - queued: `{ "status": "queued", "memories_added": 0, "memories_filtered": 0 }`
 - skipped: `{ "status": "skipped", "error": "<code>", "memories_added": 0, "memories_filtered": 0 }`
 
