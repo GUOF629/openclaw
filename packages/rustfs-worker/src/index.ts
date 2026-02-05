@@ -1,3 +1,5 @@
+import JSZip from "jszip";
+import mammoth from "mammoth";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import pdfParse from "pdf-parse";
@@ -210,6 +212,22 @@ function isPdfLike(mime: string | undefined, filename: string): boolean {
   return filename.toLowerCase().endsWith(".pdf");
 }
 
+function isDocxLike(mime: string | undefined, filename: string): boolean {
+  const m = (mime ?? "").toLowerCase().trim();
+  if (m === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+    return true;
+  }
+  return filename.toLowerCase().endsWith(".docx");
+}
+
+function isPptxLike(mime: string | undefined, filename: string): boolean {
+  const m = (mime ?? "").toLowerCase().trim();
+  if (m === "application/vnd.openxmlformats-officedocument.presentationml.presentation") {
+    return true;
+  }
+  return filename.toLowerCase().endsWith(".pptx");
+}
+
 function decodeHtmlEntities(input: string): string {
   return input
     .replaceAll("&nbsp;", " ")
@@ -330,6 +348,18 @@ function extractHtmlLike(params: {
 function guessDocType(mime: string | undefined, filename: string): string {
   const m = (mime ?? "").toLowerCase().trim();
   const lower = filename.toLowerCase();
+  if (
+    m === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    lower.endsWith(".docx")
+  ) {
+    return "docx";
+  }
+  if (
+    m === "application/vnd.openxmlformats-officedocument.presentationml.presentation" ||
+    lower.endsWith(".pptx")
+  ) {
+    return "pptx";
+  }
   if (m === "application/pdf" || lower.endsWith(".pdf")) {
     return "pdf";
   }
@@ -776,6 +806,211 @@ async function extractPdfLike(params: {
   };
 }
 
+async function extractDocxLike(params: {
+  file: RustFsFileMeta;
+  bytes: Uint8Array;
+  truncated: boolean;
+  chunkMaxChars: number;
+  chunkOverlapChars: number;
+}): Promise<ExtractionResultV1> {
+  const warnings: string[] = [];
+  const buf = Buffer.from(params.bytes);
+  let value = "";
+  try {
+    const out = await mammoth.extractRawText({ buffer: buf });
+    value = out.value ?? "";
+    const msgs = out.messages ?? [];
+    for (const m of msgs) {
+      if (m?.type && m?.message) {
+        warnings.push(`docx:${m.type}:${m.message}`);
+      }
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    warnings.push(`docx_extract_failed:${message}`);
+    return {
+      schema_version: 1,
+      docTypeGuess: "docx",
+      languageGuess: undefined,
+      segments: [],
+      warnings,
+      stats: {
+        bytes: params.bytes.length,
+        chars: 0,
+        segments: 0,
+        truncated: params.truncated,
+      },
+    };
+  }
+
+  const text = value.replace(/\r\n/g, "\n").trim();
+  const blocks = text
+    .split(/\n{2,}/g)
+    .map((b) => b.trim())
+    .filter(Boolean);
+  const segments: ExtractionSegmentV1[] = [];
+  const maxChars = Math.max(500, params.chunkMaxChars);
+  const overlap = Math.max(0, Math.min(params.chunkOverlapChars, Math.max(0, maxChars - 100)));
+  for (let bi = 0; bi < blocks.length; bi += 1) {
+    const block = blocks[bi] ?? "";
+    if (!block.trim()) {
+      continue;
+    }
+    const chunks = splitIntoChunks({ text: block, maxChars, overlapChars: overlap });
+    for (let ci = 0; ci < chunks.length; ci += 1) {
+      const c = chunks[ci];
+      if (!c) {
+        continue;
+      }
+      segments.push({
+        text: c.text,
+        locator: {
+          kind: "section",
+          index: segments.length + 1,
+          total: 0,
+          label: `paragraph ${bi + 1}`,
+          startChar: c.startChar,
+          endChar: c.endChar,
+        },
+      });
+    }
+  }
+  for (let i = 0; i < segments.length; i += 1) {
+    const seg = segments[i];
+    if (!seg?.locator) {
+      continue;
+    }
+    seg.locator.index = i + 1;
+    seg.locator.total = segments.length;
+  }
+
+  if (segments.length === 0 && text) {
+    warnings.push("empty_docx_text");
+  }
+
+  return {
+    schema_version: 1,
+    docTypeGuess: "docx",
+    languageGuess: undefined,
+    segments,
+    warnings,
+    stats: {
+      bytes: params.bytes.length,
+      chars: text.length,
+      segments: segments.length,
+      truncated: params.truncated,
+    },
+  };
+}
+
+async function extractPptxLike(params: {
+  file: RustFsFileMeta;
+  bytes: Uint8Array;
+  truncated: boolean;
+  chunkMaxChars: number;
+  chunkOverlapChars: number;
+}): Promise<ExtractionResultV1> {
+  const warnings: string[] = [];
+  const buf = Buffer.from(params.bytes);
+  const zip = await JSZip.loadAsync(buf).catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    warnings.push(`pptx_zip_failed:${message}`);
+    return null;
+  });
+  if (!zip) {
+    return {
+      schema_version: 1,
+      docTypeGuess: "pptx",
+      languageGuess: undefined,
+      segments: [],
+      warnings,
+      stats: {
+        bytes: params.bytes.length,
+        chars: 0,
+        segments: 0,
+        truncated: params.truncated,
+      },
+    };
+  }
+
+  const slideNames = Object.keys(zip.files)
+    .filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))
+    .toSorted((a, b) => {
+      const ai = Number(a.match(/slide(\d+)\.xml$/)?.[1] ?? 0);
+      const bi = Number(b.match(/slide(\d+)\.xml$/)?.[1] ?? 0);
+      return ai - bi;
+    });
+  const totalSlides = slideNames.length || 1;
+
+  const segments: ExtractionSegmentV1[] = [];
+  const maxChars = Math.max(500, params.chunkMaxChars);
+  const overlap = Math.max(0, Math.min(params.chunkOverlapChars, Math.max(0, maxChars - 100)));
+  for (let si = 0; si < slideNames.length; si += 1) {
+    const name = slideNames[si];
+    if (!name) {
+      continue;
+    }
+    const xml = await zip
+      .file(name)
+      ?.async("string")
+      .catch(() => null);
+    if (!xml) {
+      warnings.push(`pptx_slide_read_failed:${name}`);
+      continue;
+    }
+    const runs: string[] = [];
+    const re = /<a:t[^>]*>([\s\S]*?)<\/a:t>/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(xml))) {
+      const raw = decodeHtmlEntities(m[1] ?? "");
+      const t = raw.replace(/\s+/g, " ").trim();
+      if (t) {
+        runs.push(t);
+      }
+    }
+    const slideText = runs.join(" ").trim();
+    if (!slideText) {
+      continue;
+    }
+    const chunks = splitIntoChunks({ text: slideText, maxChars, overlapChars: overlap });
+    for (let ci = 0; ci < chunks.length; ci += 1) {
+      const c = chunks[ci];
+      if (!c) {
+        continue;
+      }
+      segments.push({
+        text: c.text,
+        locator: {
+          kind: "slide",
+          index: si + 1,
+          total: totalSlides,
+          label: `slide ${si + 1}`,
+          startChar: c.startChar,
+          endChar: c.endChar,
+        },
+      });
+    }
+  }
+
+  if (segments.length === 0) {
+    warnings.push("empty_pptx_text");
+  }
+
+  return {
+    schema_version: 1,
+    docTypeGuess: "pptx",
+    languageGuess: undefined,
+    segments,
+    warnings,
+    stats: {
+      bytes: params.bytes.length,
+      chars: segments.reduce((sum, s) => sum + s.text.length, 0),
+      segments: segments.length,
+      truncated: params.truncated,
+    },
+  };
+}
+
 function buildDeepMemoryMessages(params: {
   file: RustFsFileMeta;
   extraction: ExtractionResultV1;
@@ -971,7 +1206,9 @@ async function main(): Promise<void> {
           const canHtml = isHtmlLike(file.mime ?? undefined, file.filename);
           const canCode = isCodeLike(file.mime ?? undefined, file.filename);
           const canPdf = isPdfLike(file.mime ?? undefined, file.filename);
-          if (!canText && !canHtml && !canCode && !canPdf) {
+          const canDocx = isDocxLike(file.mime ?? undefined, file.filename);
+          const canPptx = isPptxLike(file.mime ?? undefined, file.filename);
+          if (!canText && !canHtml && !canCode && !canPdf && !canDocx && !canPptx) {
             await fetchJson({
               url: `${rustfsBaseUrl}/v1/files/${encodeURIComponent(file.file_id)}/extract_status`,
               method: "POST",
@@ -990,7 +1227,10 @@ async function main(): Promise<void> {
             maxBytes: env.RUSTFS_MAX_DOWNLOAD_BYTES,
           });
           const truncated = bytes.length >= env.RUSTFS_MAX_DOWNLOAD_BYTES;
-          const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+          const text =
+            canText || canHtml || canCode
+              ? new TextDecoder("utf-8", { fatal: false }).decode(bytes)
+              : "";
 
           const sessionId = `rustfs:file:${file.file_id}`;
           const extraction = canPdf
@@ -1001,32 +1241,48 @@ async function main(): Promise<void> {
                 chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
                 chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
               })
-            : canHtml
-              ? extractHtmlLike({
+            : canDocx
+              ? await extractDocxLike({
                   file,
-                  html: text,
-                  bytes: bytes.length,
+                  bytes,
                   truncated,
                   chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
                   chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
                 })
-              : canCode
-                ? extractCodeLike({
+              : canPptx
+                ? await extractPptxLike({
                     file,
-                    code: text,
-                    bytes: bytes.length,
+                    bytes,
                     truncated,
                     chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
                     chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
                   })
-                : extractTextLike({
-                    file,
-                    text,
-                    bytes: bytes.length,
-                    truncated,
-                    chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
-                    chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
-                  });
+                : canHtml
+                  ? extractHtmlLike({
+                      file,
+                      html: text,
+                      bytes: bytes.length,
+                      truncated,
+                      chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
+                      chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
+                    })
+                  : canCode
+                    ? extractCodeLike({
+                        file,
+                        code: text,
+                        bytes: bytes.length,
+                        truncated,
+                        chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
+                        chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
+                      })
+                    : extractTextLike({
+                        file,
+                        text,
+                        bytes: bytes.length,
+                        truncated,
+                        chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
+                        chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
+                      });
           if (extraction.segments.length === 0) {
             await fetchJson({
               url: `${rustfsBaseUrl}/v1/files/${encodeURIComponent(file.file_id)}/extract_status`,
