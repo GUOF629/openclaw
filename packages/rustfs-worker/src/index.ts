@@ -61,6 +61,8 @@ function buildAnnotationsV1(params: {
     updateResponse?: unknown;
     error?: string;
     overloaded?: boolean;
+    memoryIds?: string[];
+    memoryIdsTruncated?: boolean;
   };
   extraction: ExtractionResultV1;
 }): Record<string, unknown> {
@@ -132,6 +134,8 @@ function buildAnnotationsV1(params: {
       session_id: params.deepMemory.sessionId,
       namespace: params.deepMemory.namespace,
       // Optional future fields: memory_ids/source_ref mappings.
+      memory_ids: params.deepMemory.memoryIds,
+      memory_ids_truncated: params.deepMemory.memoryIdsTruncated,
     },
   };
 }
@@ -159,6 +163,10 @@ const EnvSchema = z.object({
   DEEP_MEMORY_ASYNC: z.coerce.boolean().default(true),
   DEEP_MEMORY_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
 
+  // Traceability: request memory ids (only works when DEEP_MEMORY_ASYNC=false).
+  DEEP_MEMORY_RETURN_MEMORY_IDS: z.coerce.boolean().default(false),
+  DEEP_MEMORY_MAX_RETURN_MEMORY_IDS: z.coerce.number().int().positive().max(1000).default(200),
+
   // Chunking: convert extracted text into multiple messages for better semantic indexing.
   DEEP_MEMORY_CHUNK_MAX_CHARS: z.coerce.number().int().positive().default(3500),
   DEEP_MEMORY_CHUNK_OVERLAP_CHARS: z.coerce.number().int().nonnegative().default(200),
@@ -166,6 +174,32 @@ const EnvSchema = z.object({
   // Backoff when deep-memory is overloaded.
   DEEP_MEMORY_BACKOFF_MS: z.coerce.number().int().positive().default(10_000),
 });
+
+function readStringArray(value: unknown, max: number): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const out = value
+    .filter((v): v is string => typeof v === "string")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, Math.max(0, Math.min(1000, Math.trunc(max))));
+  return out.length > 0 ? out : undefined;
+}
+
+function extractMemoryIdsFromUpdateResponse(updateRes: unknown): {
+  ids?: string[];
+  truncated?: boolean;
+} {
+  if (!updateRes || typeof updateRes !== "object") {
+    return {};
+  }
+  const r = updateRes as Record<string, unknown>;
+  const ids = readStringArray(r.memory_ids, 1000);
+  const truncated =
+    typeof r.memory_ids_truncated === "boolean" ? r.memory_ids_truncated : undefined;
+  return { ids, truncated };
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1348,6 +1382,7 @@ async function main(): Promise<void> {
           let updateRes: unknown;
           const tDeep0 = Date.now();
           try {
+            const wantMemoryIds = env.DEEP_MEMORY_RETURN_MEMORY_IDS && !env.DEEP_MEMORY_ASYNC;
             updateRes = await fetchJson<unknown>({
               url: `${deepBaseUrl}/update_memory_index`,
               method: "POST",
@@ -1358,6 +1393,8 @@ async function main(): Promise<void> {
                 session_id: sessionId,
                 messages,
                 async: env.DEEP_MEMORY_ASYNC,
+                return_memory_ids: wantMemoryIds ? true : undefined,
+                max_memory_ids: wantMemoryIds ? env.DEEP_MEMORY_MAX_RETURN_MEMORY_IDS : undefined,
               },
             });
           } catch (err) {
@@ -1391,6 +1428,7 @@ async function main(): Promise<void> {
           const deepMemoryMs = Date.now() - tDeep0;
 
           const tAnno0 = Date.now();
+          const memIds = extractMemoryIdsFromUpdateResponse(updateRes);
           const annotations = buildAnnotationsV1({
             file,
             existingAnnotations: file.annotations,
@@ -1399,6 +1437,8 @@ async function main(): Promise<void> {
               namespace: env.DEEP_MEMORY_NAMESPACE?.trim() || undefined,
               sessionId,
               updateResponse: updateRes,
+              memoryIds: memIds.ids,
+              memoryIdsTruncated: memIds.truncated,
             },
             extraction,
           });
