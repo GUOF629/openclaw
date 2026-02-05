@@ -104,5 +104,6 @@ describe("file_search tool schema", () => {
     expect(props).toHaveProperty("semanticMaxMemories");
     expect(props).toHaveProperty("semanticMaxChars");
     expect(props).toHaveProperty("rerank");
+    expect(props).toHaveProperty("extractStatus");
   });
 });

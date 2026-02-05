@@ -10,6 +10,102 @@ import { resolveDeepMemoryConfig } from "../deep-memory.js";
 import { resolveRustFsConfig } from "../rustfs.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
+type FileSearchCandidate = {
+  n: number;
+  fileId: string;
+  filename: string;
+  mime?: string;
+  size?: number;
+  createdAtMs?: number;
+  extractStatus?: string;
+  tags?: string[];
+  kind?: string;
+  hint?: string;
+  semanticScore?: number;
+  semanticTopics?: string[];
+  semanticEntities?: string[];
+  semanticContext?: string;
+};
+
+function readIngestHintsFromAnnotations(annotations: unknown): {
+  tags?: string[];
+  kind?: string;
+  hint?: string;
+} {
+  const root =
+    annotations && typeof annotations === "object"
+      ? (annotations as Record<string, unknown>)
+      : null;
+  const ingest =
+    root && root.openclaw_ingest && typeof root.openclaw_ingest === "object"
+      ? (root.openclaw_ingest as Record<string, unknown>)
+      : null;
+  if (!ingest) {
+    return {};
+  }
+  const kind = typeof ingest.kind === "string" ? ingest.kind.trim() : "";
+  const hint = typeof ingest.hint === "string" ? ingest.hint.trim() : "";
+  const tags =
+    Array.isArray(ingest.tags) && ingest.tags.every((t) => typeof t === "string")
+      ? ingest.tags
+          .map((t) => t.trim())
+          .filter(Boolean)
+          .slice(0, 20)
+      : undefined;
+  return {
+    kind: kind || undefined,
+    hint: hint || undefined,
+    tags: tags && tags.length > 0 ? tags : undefined,
+  };
+}
+
+function buildCandidates(items: Array<Record<string, unknown>>): FileSearchCandidate[] {
+  return items.slice(0, 50).map((raw, idx) => {
+    const fileId = typeof raw.file_id === "string" ? raw.file_id : "";
+    const filename = typeof raw.filename === "string" ? raw.filename : "";
+    const mime = typeof raw.mime === "string" ? raw.mime : undefined;
+    const size = typeof raw.size === "number" ? raw.size : undefined;
+    const createdAtMs = typeof raw.created_at_ms === "number" ? raw.created_at_ms : undefined;
+    const extractStatus = typeof raw.extract_status === "string" ? raw.extract_status : undefined;
+
+    const { tags, kind, hint } = readIngestHintsFromAnnotations(raw.annotations);
+
+    const semantic =
+      raw.semantic && typeof raw.semantic === "object"
+        ? (raw.semantic as Record<string, unknown>)
+        : null;
+    const semanticScore =
+      semantic && typeof semantic.score === "number" ? semantic.score : undefined;
+    const semanticTopics =
+      semantic && Array.isArray(semantic.topics)
+        ? (semantic.topics as string[]).filter((t) => typeof t === "string").slice(0, 10)
+        : undefined;
+    const semanticEntities =
+      semantic && Array.isArray(semantic.entities)
+        ? (semantic.entities as string[]).filter((t) => typeof t === "string").slice(0, 10)
+        : undefined;
+    const semanticContext =
+      semantic && typeof semantic.context === "string" ? semantic.context.slice(0, 400) : undefined;
+
+    return {
+      n: idx + 1,
+      fileId,
+      filename,
+      mime,
+      size,
+      createdAtMs,
+      extractStatus,
+      tags,
+      kind,
+      hint,
+      semanticScore,
+      semanticTopics,
+      semanticEntities,
+      semanticContext,
+    };
+  });
+}
+
 const FileSearchSchema = Type.Object({
   query: Type.Optional(Type.String()),
   semanticQuery: Type.Optional(Type.String()),
@@ -85,7 +181,7 @@ export function createFileSearchTool(options: {
     label: "File Search",
     name: "file_search",
     description:
-      "Search session files archived in RustFS by project + optional filters (query, sessionId, mime). Returns a short candidate list for the user to pick from.",
+      "Search session files archived in RustFS by project + optional filters (query, sessionId, mime). Always ask the user to confirm a candidate (by n or fileId) before calling file_send.",
     parameters: FileSearchSchema,
     execute: async (_toolCallId, params) => {
       try {
@@ -120,14 +216,35 @@ export function createFileSearchTool(options: {
           extractStatus,
           limit,
         });
-        if (!out.ok || !includeSemantic) {
+        if (!out.ok) {
           return jsonResult(out);
+        }
+        if (!includeSemantic) {
+          const items = out.items as unknown as Array<Record<string, unknown>>;
+          return jsonResult({
+            ok: true,
+            items,
+            candidates: buildCandidates(items),
+            selection: {
+              required: true,
+              message:
+                "请让用户从 candidates 里选择（回复 n 或 fileId），确认后再调用 file_send。避免在未确认时直接发送文件。",
+            },
+          });
         }
 
         if (!deep) {
+          const items = out.items as unknown as Array<Record<string, unknown>>;
           return jsonResult({
-            ...out,
+            ok: true,
+            items,
+            candidates: buildCandidates(items),
             semantic: { ok: false, error: "deep-memory not configured for this agent" },
+            selection: {
+              required: true,
+              message:
+                "deep-memory 未配置；请让用户从 candidates 里选择（回复 n 或 fileId），确认后再调用 file_send。",
+            },
           });
         }
 
@@ -193,7 +310,17 @@ export function createFileSearchTool(options: {
           ? decorated.toSorted((a, b) => scoreOf(b) - scoreOf(a))
           : decorated;
 
-        return jsonResult({ ok: true, items: finalItems, semantic: { ok: true } });
+        return jsonResult({
+          ok: true,
+          items: finalItems,
+          candidates: buildCandidates(finalItems),
+          semantic: { ok: true },
+          selection: {
+            required: true,
+            message:
+              "请让用户从 candidates 里选择（回复 n 或 fileId），确认后再调用 file_send。若用户目标不明确，先追问澄清再发送。",
+          },
+        });
       } catch (err) {
         return jsonResult({ ok: false, error: err instanceof Error ? err.message : String(err) });
       }
@@ -218,7 +345,7 @@ export function createFileSendTool(options: {
     label: "File Send (Link)",
     name: "file_send",
     description:
-      "Create a short-lived public download link for a RustFS fileId. Use this to share files with users (default behavior: send link).",
+      "Create a short-lived public download link for a RustFS fileId. Only call this after the user explicitly confirms which file to send (from file_search candidates).",
     parameters: FileSendSchema,
     execute: async (_toolCallId, params) => {
       try {
