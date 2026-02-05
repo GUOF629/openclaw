@@ -35,6 +35,9 @@
 - `DEEP_MEMORY_BACKOFF_MS`（默认 `10000`）：deep-memory 过载时退避等待
 - `DEEP_MEMORY_RETURN_MEMORY_IDS`（默认 `false`）：请求 deep-memory 返回本次写入/更新的 `memory_ids`（**仅在 `DEEP_MEMORY_ASYNC=false` 时生效**）
 - `DEEP_MEMORY_MAX_RETURN_MEMORY_IDS`（默认 `200`，最大 `1000`）：返回 `memory_ids` 的上限
+- `DEEP_MEMORY_INSPECT_ENABLED`（默认 `false`）：indexed 后调用 deep-memory `POST /session/inspect`，回写 `annotations.semantics`
+- `DEEP_MEMORY_INSPECT_LIMIT`（默认 `100`）：inspect 拉取 memories 上限
+- `DEEP_MEMORY_INSPECT_INCLUDE_CONTENT`（默认 `false`）：inspect 时是否包含代表性内容（用于生成 summary）
 
 ## 运行
 

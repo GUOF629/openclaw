@@ -136,6 +136,19 @@ Overload (503):
 - `{ "error": "queue_overloaded", "pendingApprox": <n>, "retryAfterSeconds": <n> }`
 - `{ "error": "degraded_read_only", "pendingApprox": <n>, "retryAfterSeconds": <n> }`
 
+### `POST /session/inspect`
+
+Returns a session-level summary without requiring `user_input`.
+
+Request body:
+
+- `namespace` (optional)
+- `session_id` (required)
+- `limit` (optional, default 100, max 1000)
+- `include_content` (optional, default false)
+
+Success (200): `InspectSessionResponse` (topics/entities aggregation + representative memories; `summary` only when `include_content=true`).
+
 ### `POST /forget`
 
 Success (200):
