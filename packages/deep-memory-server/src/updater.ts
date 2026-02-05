@@ -58,6 +58,7 @@ export class DeepMemoryUpdater {
     namespace: string;
     sessionId: string;
     messages: unknown[];
+    returnMemoryIds?: { max: number };
   }): Promise<UpdateMemoryIndexResponse> {
     const messageCount = Array.isArray(params.messages) ? params.messages.length : 0;
     const transcriptHash = crypto
@@ -133,6 +134,8 @@ export class DeepMemoryUpdater {
 
     let added = 0;
     let filtered = analysis.filtered.filtered;
+    const requestedMaxIds = Math.max(0, Math.trunc(params.returnMemoryIds?.max ?? 0));
+    const memoryIds = requestedMaxIds > 0 ? new Set<string>() : null;
     const entityTypeByName = new Map<string, string>();
     for (const e of analysis.entities) {
       entityTypeByName.set(e.name, e.type);
@@ -320,6 +323,9 @@ export class DeepMemoryUpdater {
       }
 
       added += 1;
+      if (memoryIds && memoryIds.size < requestedMaxIds) {
+        memoryIds.add(id);
+      }
     }
 
     // Persist idempotency markers (best-effort).
@@ -334,10 +340,17 @@ export class DeepMemoryUpdater {
       // ignore
     }
 
-    return {
+    const out: UpdateMemoryIndexResponse = {
       status: "processed",
       memories_added: added,
       memories_filtered: filtered,
     };
+    if (memoryIds) {
+      const ids = Array.from(memoryIds);
+      (out as unknown as Record<string, unknown>).memory_ids = ids;
+      (out as unknown as Record<string, unknown>).memory_ids_truncated =
+        ids.length >= requestedMaxIds;
+    }
+    return out;
   }
 }

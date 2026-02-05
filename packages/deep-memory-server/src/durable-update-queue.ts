@@ -11,6 +11,9 @@ type UpdateRequest = {
   sessionId: string;
   messages: unknown[];
   notBeforeMs?: number;
+  returnMemoryIds?: {
+    max: number;
+  };
 };
 
 type PersistedUpdateTask = {

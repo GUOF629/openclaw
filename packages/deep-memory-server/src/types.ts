@@ -26,6 +26,13 @@ export type UpdateMemoryIndexRequest = {
   // OpenClaw sends transcript messages (best-effort). We treat as opaque and extract what we can.
   messages: unknown[];
   async?: boolean;
+  /**
+   * If true and async=false, include memory ids written/updated in the response.
+   * This is intended for traceability (e.g. file_id -> memory_ids).
+   */
+  return_memory_ids?: boolean;
+  /** Maximum memory ids to return (default 200, max 1000). Only applies when return_memory_ids=true. */
+  max_memory_ids?: number;
 };
 
 export type UpdateMemoryIndexResponse =
@@ -43,6 +50,8 @@ export type UpdateMemoryIndexResponse =
       status: "processed";
       memories_added: number;
       memories_filtered: number;
+      memory_ids?: string[];
+      memory_ids_truncated?: boolean;
     }
   | {
       status: "skipped";

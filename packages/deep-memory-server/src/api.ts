@@ -67,6 +67,8 @@ const UpdateSchema = z.object({
   session_id: z.string(),
   messages: z.array(z.unknown()),
   async: z.boolean().optional(),
+  return_memory_ids: z.boolean().optional(),
+  max_memory_ids: z.number().int().positive().max(1000).optional(),
 });
 
 const ForgetSchema = z
@@ -580,6 +582,11 @@ export function createApi(params: {
       namespace,
       sessionId: req.session_id,
       messages: req.messages,
+      returnMemoryIds: req.return_memory_ids
+        ? {
+            max: Math.max(1, Math.min(1000, Math.trunc(req.max_memory_ids ?? 200))),
+          }
+        : undefined,
     });
     params.metrics?.updateMemoriesAddedTotal.labels("200").inc(result.memories_added ?? 0);
     params.metrics?.updateMemoriesFilteredTotal.labels("200").inc(result.memories_filtered ?? 0);
