@@ -25,6 +25,7 @@ type FileSearchCandidate = {
   semanticTopics?: string[];
   semanticEntities?: string[];
   semanticContext?: string;
+  semanticSummary?: string;
 };
 
 function buildClarify(params: { candidates: FileSearchCandidate[]; includeSemantic: boolean }):
@@ -97,6 +98,38 @@ function buildClarify(params: { candidates: FileSearchCandidate[]; includeSemant
   };
 }
 
+function readSemanticsFromAnnotations(annotations: unknown): {
+  summary?: string;
+  topics?: string[];
+  entities?: string[];
+} {
+  const root =
+    annotations && typeof annotations === "object"
+      ? (annotations as Record<string, unknown>)
+      : null;
+  const sem =
+    root && root.semantics && typeof root.semantics === "object"
+      ? (root.semantics as Record<string, unknown>)
+      : null;
+  if (!sem) {
+    return {};
+  }
+  const summary = typeof sem.summary === "string" ? sem.summary.slice(0, 400) : undefined;
+  const topics =
+    Array.isArray(sem.topics) && sem.topics.every((t) => typeof t === "string")
+      ? sem.topics.slice(0, 10)
+      : undefined;
+  const entities =
+    Array.isArray(sem.entities) && sem.entities.every((t) => typeof t === "string")
+      ? sem.entities.slice(0, 10)
+      : undefined;
+  return {
+    summary: summary && summary.trim() ? summary.trim() : undefined,
+    topics: topics && topics.length > 0 ? topics : undefined,
+    entities: entities && entities.length > 0 ? entities : undefined,
+  };
+}
+
 function readIngestHintsFromAnnotations(annotations: unknown): {
   tags?: string[];
   kind?: string;
@@ -106,10 +139,15 @@ function readIngestHintsFromAnnotations(annotations: unknown): {
     annotations && typeof annotations === "object"
       ? (annotations as Record<string, unknown>)
       : null;
-  const ingest =
+  const ingestRaw =
     root && root.openclaw_ingest && typeof root.openclaw_ingest === "object"
       ? (root.openclaw_ingest as Record<string, unknown>)
       : null;
+  const clsRaw =
+    root && root.classification && typeof root.classification === "object"
+      ? (root.classification as Record<string, unknown>)
+      : null;
+  const ingest = ingestRaw ?? clsRaw;
   if (!ingest) {
     return {};
   }
@@ -139,6 +177,7 @@ function buildCandidates(items: Array<Record<string, unknown>>): FileSearchCandi
     const extractStatus = typeof raw.extract_status === "string" ? raw.extract_status : undefined;
 
     const { tags, kind, hint } = readIngestHintsFromAnnotations(raw.annotations);
+    const sem = readSemanticsFromAnnotations(raw.annotations);
 
     const semantic =
       raw.semantic && typeof raw.semantic === "object"
@@ -147,15 +186,19 @@ function buildCandidates(items: Array<Record<string, unknown>>): FileSearchCandi
     const semanticScore =
       semantic && typeof semantic.score === "number" ? semantic.score : undefined;
     const semanticTopics =
-      semantic && Array.isArray(semantic.topics)
+      (semantic && Array.isArray(semantic.topics)
         ? (semantic.topics as string[]).filter((t) => typeof t === "string").slice(0, 10)
-        : undefined;
+        : undefined) ?? sem.topics;
     const semanticEntities =
-      semantic && Array.isArray(semantic.entities)
+      (semantic && Array.isArray(semantic.entities)
         ? (semantic.entities as string[]).filter((t) => typeof t === "string").slice(0, 10)
-        : undefined;
+        : undefined) ?? sem.entities;
     const semanticContext =
       semantic && typeof semantic.context === "string" ? semantic.context.slice(0, 400) : undefined;
+    const semanticSummary =
+      (semantic && typeof semantic.summary === "string"
+        ? semantic.summary.slice(0, 400)
+        : undefined) ?? sem.summary;
 
     return {
       n: idx + 1,
@@ -172,6 +215,7 @@ function buildCandidates(items: Array<Record<string, unknown>>): FileSearchCandi
       semanticTopics,
       semanticEntities,
       semanticContext,
+      semanticSummary,
     };
   });
 }

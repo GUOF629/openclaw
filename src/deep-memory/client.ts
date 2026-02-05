@@ -20,6 +20,22 @@ export type DeepMemoryUpdateResponse = {
   memories_filtered?: number;
 };
 
+export type DeepMemoryInspectSessionResponse = {
+  namespace?: string;
+  session_id?: string;
+  topics?: Array<{ name?: string; frequency?: number }>;
+  entities?: Array<{ name?: string; frequency?: number }>;
+  summary?: string;
+  memories?: Array<{
+    id?: string;
+    importance?: number;
+    created_at?: string;
+    content?: string;
+    topics?: string[];
+    entities?: string[];
+  }>;
+};
+
 export type DeepMemoryForgetResponse = {
   status?: string;
   namespace?: string;
@@ -163,6 +179,24 @@ export class DeepMemoryClient {
       return value;
     } catch (err) {
       log.warn(`retrieve_context failed: ${String(err)}`);
+      return {};
+    }
+  }
+
+  async inspectSession(params: {
+    sessionId: string;
+    limit?: number;
+    includeContent?: boolean;
+  }): Promise<DeepMemoryInspectSessionResponse> {
+    try {
+      return await this.postJson<DeepMemoryInspectSessionResponse>("/session/inspect", {
+        namespace: this.namespace,
+        session_id: params.sessionId,
+        limit: params.limit,
+        include_content: params.includeContent,
+      });
+    } catch (err) {
+      log.warn(`session inspect failed: ${String(err)}`);
       return {};
     }
   }
