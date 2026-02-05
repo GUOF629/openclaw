@@ -1,10 +1,10 @@
 # RustFS Worker
 
-一个最小可用的后台 worker：从 RustFS 拉取 `extract_status=pending` 的文件，做基础文本抽取后：
+一个最小可用的后台 worker：通过 RustFS 的原子 `claim_extract`（租约领取）接口拉取待处理文件，做基础文本抽取后：
 
 - 回写 RustFS `annotations`
 - 更新 RustFS `extract_status`（`indexed` / `skipped` / `failed`）
-- 调用 deep-memory-server 的 `/update_memory_index`，将文件内容（节选）纳入语义记忆系统
+- 调用 deep-memory-server 的 `/update_memory_index`，将文件内容（分 chunk）纳入语义记忆系统
 
 ## 环境变量
 
@@ -21,6 +21,9 @@
 - `DEEP_MEMORY_NAMESPACE`（可选）
 - `DEEP_MEMORY_ASYNC`（默认 `true`）
 - `DEEP_MEMORY_TIMEOUT_MS`（默认 `30000`）
+- `DEEP_MEMORY_CHUNK_MAX_CHARS`（默认 `3500`）
+- `DEEP_MEMORY_CHUNK_OVERLAP_CHARS`（默认 `200`）
+- `DEEP_MEMORY_BACKOFF_MS`（默认 `10000`）：deep-memory 过载时退避等待
 
 ## 运行
 

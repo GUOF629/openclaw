@@ -40,6 +40,54 @@ Response:
 { "ok": true, "items": [{ "file_id": "...", "tenant_id": "...", "filename": "...", "size": 123 }] }
 ```
 
+### Extract jobs (worker)
+
+RustFS stores a per-file extraction/indexing status (`extract_status`) and optional `annotations` used by downstream semantic retrieval.
+
+#### Claim (recommended; atomic leasing)
+
+`POST /v1/files/claim_extract`
+
+Body:
+
+```json
+{ "tenant_id": "default", "limit": 25, "lease_ms": 300000 }
+```
+
+Behavior:
+
+- Atomically selects files that are pending (`extract_status` missing or `pending`) or stuck in `processing` past the lease window
+- Marks them as `processing` (updates `extract_updated_at_ms`, increments `extract_attempt`)
+- Returns the claimed file metadata (including `annotations` fields)
+
+This avoids duplicate processing when multiple workers are running.
+
+#### Pending list (legacy; non-atomic)
+
+`GET /v1/files/pending_extract?tenant_id=...&limit=25&lease_ms=300000`
+
+Note: this endpoint only lists candidates; it does not claim them atomically. Prefer `claim_extract`.
+
+#### Update annotations
+
+`POST /v1/files/:file_id/annotations`
+
+Body:
+
+```json
+{ "annotations": { "any": "json" }, "source": "rustfs-worker" }
+```
+
+#### Update extract status
+
+`POST /v1/files/:file_id/extract_status`
+
+Body:
+
+```json
+{ "status": "indexed", "error": "" }
+```
+
 ### Metadata
 
 `GET /v1/files/:file_id/meta`
@@ -57,6 +105,10 @@ Body:
 ### Download
 
 `GET /v1/files/:file_id`
+
+### List tombstoned files (worker)
+
+`GET /v1/files/tombstoned?tenant_id=...&since_ms=0&limit=100`
 
 ### Public share link (signed, short-lived)
 
