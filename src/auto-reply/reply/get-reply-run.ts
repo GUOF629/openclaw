@@ -380,6 +380,7 @@ export async function runPreparedReply(
       senderName: sessionCtx.SenderName?.trim() || undefined,
       senderUsername: sessionCtx.SenderUsername?.trim() || undefined,
       senderE164: sessionCtx.SenderE164?.trim() || undefined,
+      senderIsOwner: command.senderIsOwner,
       sessionFile,
       workspaceDir,
       config: cfg,
