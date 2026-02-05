@@ -736,6 +736,21 @@ struct PendingResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct ClaimExtractRequest {
+    tenant_id: Option<String>,
+    limit: Option<u32>,
+    // Re-lease "processing" jobs if stuck longer than this.
+    lease_ms: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct ClaimExtractResponse {
+    ok: bool,
+    items: Vec<FileMeta>,
+    claimed_at_ms: i64,
+}
+
+#[derive(Debug, Deserialize)]
 struct AnnotationsRequest {
     // Keep this opaque and LLM-friendly: semantics are application-defined.
     annotations: serde_json::Value,
@@ -902,6 +917,146 @@ async fn pending_extract(
     .await?;
 
     Ok((StatusCode::OK, Json(PendingResponse { ok: true, items })))
+}
+
+async fn claim_extract(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ClaimExtractRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let auth = auth_from_headers(&state, &headers, req.tenant_id.as_deref())?;
+    // Claiming is a mutating operation (leases work); require write.
+    assert_can_write(&auth)?;
+    let tenant_id = auth.tenant_id;
+    let limit = req.limit.unwrap_or(25).clamp(1, 200) as i64;
+    let lease_ms = req.lease_ms.unwrap_or(300_000).clamp(5_000, 86_400_000) as i64;
+    let now = now_ms();
+    let lease_before_ms = now - lease_ms;
+
+    let tenant_id_db = tenant_id.clone();
+    let items = with_conn(&state, move |conn| -> Result<Vec<FileMeta>, AppError> {
+        // We want an IMMEDIATE transaction to atomically claim work across
+        // multiple workers. Use BEGIN IMMEDIATE to avoid requiring &mut Connection.
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| AppError::Db(e.to_string()))?;
+
+        let res: Result<Vec<FileMeta>, AppError> = (|| {
+            // 1) Select candidate ids inside the transaction.
+            let mut stmt = conn
+                .prepare(
+                "SELECT file_id
+                 FROM files
+                 WHERE tenant_id=?1 AND deleted_at_ms IS NULL AND (
+                   extract_status IS NULL
+                   OR extract_status='pending'
+                   OR (extract_status='processing' AND COALESCE(extract_updated_at_ms, 0) <= ?3)
+                 )
+                 ORDER BY created_at_ms ASC
+                 LIMIT ?2",
+                )
+                .map_err(|e| AppError::Db(e.to_string()))?;
+            let mut rows = stmt
+                .query(params![tenant_id_db.clone(), limit, lease_before_ms])
+                .map_err(|e| AppError::Db(e.to_string()))?;
+            let mut ids: Vec<String> = Vec::new();
+            while let Some(row) = rows.next().map_err(|e| AppError::Db(e.to_string()))? {
+                let id: String = row.get(0).map_err(|e| AppError::Db(e.to_string()))?;
+                if !id.trim().is_empty() {
+                    ids.push(id);
+                }
+            }
+            drop(rows);
+            drop(stmt);
+
+            if ids.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            // 2) Mark them as processing (lease).
+            for file_id in &ids {
+                conn.execute(
+                    "UPDATE files
+                     SET extract_status='processing',
+                         extract_updated_at_ms=?1,
+                         extract_attempt=COALESCE(extract_attempt, 0) + 1,
+                         extract_error=''
+                     WHERE tenant_id=?2 AND file_id=?3 AND deleted_at_ms IS NULL",
+                    params![now, tenant_id_db.clone(), file_id],
+                )
+                .map_err(|e| AppError::Db(e.to_string()))?;
+            }
+
+            // 3) Load and return the claimed rows.
+            let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+            let sql = format!(
+                "SELECT file_id, tenant_id, session_id, filename, mime, size, sha256, created_at_ms, source, encrypted, extract_status, extract_updated_at_ms, extract_attempt, extract_error, annotations_json
+                 FROM files
+                 WHERE tenant_id=?1 AND deleted_at_ms IS NULL AND file_id IN ({placeholders})
+                 ORDER BY created_at_ms ASC"
+            );
+            let mut args: Vec<rusqlite::types::Value> = vec![tenant_id_db.clone().into()];
+            for id in &ids {
+                args.push(id.clone().into());
+            }
+            let mut stmt2 = conn.prepare(&sql).map_err(|e| AppError::Db(e.to_string()))?;
+            let mut rows2 = stmt2
+                .query(rusqlite::params_from_iter(args))
+                .map_err(|e| AppError::Db(e.to_string()))?;
+            let mut out = Vec::new();
+            while let Some(row) = rows2.next().map_err(|e| AppError::Db(e.to_string()))? {
+                let annotations_raw: Option<String> = row.get(14).ok();
+                let annotations = annotations_raw
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+                out.push(FileMeta {
+                    file_id: row.get(0).map_err(|e| AppError::Db(e.to_string()))?,
+                    tenant_id: row.get(1).map_err(|e| AppError::Db(e.to_string()))?,
+                    session_id: row.get(2).map_err(|e| AppError::Db(e.to_string()))?,
+                    filename: row.get(3).map_err(|e| AppError::Db(e.to_string()))?,
+                    mime: row.get(4).map_err(|e| AppError::Db(e.to_string()))?,
+                    size: row.get(5).map_err(|e| AppError::Db(e.to_string()))?,
+                    sha256: row.get(6).map_err(|e| AppError::Db(e.to_string()))?,
+                    created_at_ms: row.get(7).map_err(|e| AppError::Db(e.to_string()))?,
+                    source: row.get(8).map_err(|e| AppError::Db(e.to_string()))?,
+                    encrypted: {
+                        let v: i64 = row.get(9).map_err(|e| AppError::Db(e.to_string()))?;
+                        v != 0
+                    },
+                    extract_status: row.get(10).ok(),
+                    extract_updated_at_ms: row.get(11).ok(),
+                    extract_attempt: row.get(12).ok(),
+                    extract_error: row.get(13).ok(),
+                    annotations,
+                });
+            }
+            drop(rows2);
+            drop(stmt2);
+
+            Ok(out)
+        })();
+
+        match &res {
+            Ok(_) => {
+                conn.execute_batch("COMMIT")
+                    .map_err(|e| AppError::Db(e.to_string()))?;
+            }
+            Err(_) => {
+                let _ = conn.execute_batch("ROLLBACK");
+            }
+        }
+
+        res
+    })
+    .await?;
+
+    Ok((
+        StatusCode::OK,
+        Json(ClaimExtractResponse {
+            ok: true,
+            items,
+            claimed_at_ms: now,
+        }),
+    ))
 }
 
 async fn upsert_annotations(
@@ -1584,6 +1739,7 @@ async fn main() -> Result<(), anyhow::Error> {
         .route("/readyz", get(readyz))
         .route("/v1/files", post(ingest).get(search))
         .route("/v1/files/pending_extract", get(pending_extract))
+        .route("/v1/files/claim_extract", post(claim_extract))
         .route("/v1/files/tombstoned", get(tombstoned))
         .route("/v1/files/:file_id/meta", get(meta))
         .route("/v1/files/:file_id", get(download))
