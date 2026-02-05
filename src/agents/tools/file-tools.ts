@@ -419,43 +419,103 @@ export function createFileSearchTool(options: {
           semanticMaxConcurrent,
           async (item) => {
             const dmSessionId = `rustfs:file:${item.file_id}`;
-            const cacheKey = `${userInput}::${semanticMaxMemories}::${dmSessionId}`;
-            const cached = semanticCache.get(cacheKey);
-            if (cached && cached.expiresAt > Date.now()) {
-              return { fileId: item.file_id, semantic: cached.value };
-            }
-            const retrieved = await deep.retrieveContext({
-              userInput,
-              sessionId: dmSessionId,
-              maxMemories: Math.max(1, Math.min(50, semanticMaxMemories)),
-            });
-            const context = (retrieved.context ?? "").trim();
-            const contextClamped =
-              context.length > semanticMaxChars ? context.slice(0, semanticMaxChars) : context;
-            const memories = Array.isArray(retrieved.memories) ? retrieved.memories : [];
-            const score = memories.reduce(
-              (acc, m) => acc + (typeof m.relevance === "number" ? m.relevance : 0),
-              0,
-            );
+            const retrieveKey = `retrieve::${userInput}::${semanticMaxMemories}::${dmSessionId}`;
+            const inspectKey = `inspect::${dmSessionId}`;
+
+            const cachedRetrieve = semanticCache.get(retrieveKey);
+            const cachedInspect = semanticCache.get(inspectKey);
+
+            const retrievePromise =
+              cachedRetrieve && cachedRetrieve.expiresAt > Date.now()
+                ? Promise.resolve(cachedRetrieve.value)
+                : deep
+                    .retrieveContext({
+                      userInput,
+                      sessionId: dmSessionId,
+                      maxMemories: Math.max(1, Math.min(50, semanticMaxMemories)),
+                    })
+                    .then((retrieved) => {
+                      const context = (retrieved.context ?? "").trim();
+                      const contextClamped =
+                        context.length > semanticMaxChars
+                          ? context.slice(0, semanticMaxChars)
+                          : context;
+                      const memories = Array.isArray(retrieved.memories) ? retrieved.memories : [];
+                      const score = memories.reduce(
+                        (acc, m) => acc + (typeof m.relevance === "number" ? m.relevance : 0),
+                        0,
+                      );
+                      const value = {
+                        score,
+                        context: contextClamped,
+                        memories: memories
+                          .slice(0, Math.max(1, Math.min(50, semanticMaxMemories)))
+                          .map((m) => ({
+                            id: m.id,
+                            relevance: m.relevance,
+                            importance: m.importance,
+                            content:
+                              typeof m.content === "string" ? m.content.slice(0, 400) : undefined,
+                          })),
+                      } satisfies Record<string, unknown>;
+                      semanticCache.set(retrieveKey, {
+                        value,
+                        expiresAt: Date.now() + semanticCacheTtlMs,
+                      });
+                      return value;
+                    });
+
+            const inspectPromise =
+              cachedInspect && cachedInspect.expiresAt > Date.now()
+                ? Promise.resolve(cachedInspect.value)
+                : deep
+                    .inspectSession({
+                      sessionId: dmSessionId,
+                      limit: 100,
+                      includeContent: false,
+                    })
+                    .then((inspected) => {
+                      const topics =
+                        Array.isArray(inspected.topics) && inspected.topics.length > 0
+                          ? inspected.topics
+                              .map((t) => (typeof t?.name === "string" ? t.name.trim() : ""))
+                              .filter(Boolean)
+                              .slice(0, 20)
+                          : [];
+                      const entities =
+                        Array.isArray(inspected.entities) && inspected.entities.length > 0
+                          ? inspected.entities
+                              .map((e) => (typeof e?.name === "string" ? e.name.trim() : ""))
+                              .filter(Boolean)
+                              .slice(0, 20)
+                          : [];
+                      const summary =
+                        typeof inspected.summary === "string"
+                          ? inspected.summary.slice(0, 800)
+                          : undefined;
+                      const value = {
+                        topics,
+                        entities,
+                        summary,
+                      } satisfies Record<string, unknown>;
+                      semanticCache.set(inspectKey, {
+                        value,
+                        expiresAt: Date.now() + semanticCacheTtlMs,
+                      });
+                      return value;
+                    });
+
+            const [retrieveEvidence, inspectEvidence] = await Promise.all([
+              retrievePromise,
+              inspectPromise,
+            ]);
+
             const semantic = {
               deepMemorySessionId: dmSessionId,
-              score,
-              entities: Array.isArray(retrieved.entities) ? retrieved.entities.slice(0, 20) : [],
-              topics: Array.isArray(retrieved.topics) ? retrieved.topics.slice(0, 20) : [],
-              context: contextClamped,
-              memories: memories
-                .slice(0, Math.max(1, Math.min(50, semanticMaxMemories)))
-                .map((m) => ({
-                  id: m.id,
-                  relevance: m.relevance,
-                  importance: m.importance,
-                  content: typeof m.content === "string" ? m.content.slice(0, 400) : undefined,
-                })),
+              ...(inspectEvidence ?? {}),
+              ...(retrieveEvidence ?? {}),
             } satisfies Record<string, unknown>;
-            semanticCache.set(cacheKey, {
-              value: semantic,
-              expiresAt: Date.now() + semanticCacheTtlMs,
-            });
+
             return { fileId: item.file_id, semantic };
           },
         );
