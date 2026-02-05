@@ -48,6 +48,9 @@ const EnvSchema = z.object({
   // Chunking: convert extracted text into multiple messages for better semantic indexing.
   DEEP_MEMORY_CHUNK_MAX_CHARS: z.coerce.number().int().positive().default(3500),
   DEEP_MEMORY_CHUNK_OVERLAP_CHARS: z.coerce.number().int().nonnegative().default(200),
+
+  // Backoff when deep-memory is overloaded.
+  DEEP_MEMORY_BACKOFF_MS: z.coerce.number().int().positive().default(10_000),
 });
 
 function sleep(ms: number): Promise<void> {
@@ -114,6 +117,18 @@ async function fetchJson<T>(params: {
   } finally {
     clearTimeout(timer);
   }
+}
+
+function isOverloadLikeError(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes("http 503") ||
+    m.includes("queue_overloaded") ||
+    m.includes("degraded_read_only") ||
+    m.includes("namespace_overloaded") ||
+    m.includes("rate limit") ||
+    m.includes("http 429")
+  );
 }
 
 async function fetchBytes(params: {
@@ -309,17 +324,29 @@ async function main(): Promise<void> {
     const tItems = tomb.items ?? [];
     for (const item of tItems) {
       const sessionId = `rustfs:file:${item.file_id}`;
-      const res = await fetchJson<unknown>({
-        url: `${deepBaseUrl}/forget`,
-        method: "POST",
-        apiKey: env.DEEP_MEMORY_API_KEY,
-        timeoutMs: env.DEEP_MEMORY_TIMEOUT_MS,
-        body: {
-          namespace: env.DEEP_MEMORY_NAMESPACE?.trim() || undefined,
-          session_id: sessionId,
-          async: true,
-        },
-      });
+      let res: unknown;
+      try {
+        res = await fetchJson<unknown>({
+          url: `${deepBaseUrl}/forget`,
+          method: "POST",
+          apiKey: env.DEEP_MEMORY_API_KEY,
+          timeoutMs: env.DEEP_MEMORY_TIMEOUT_MS,
+          body: {
+            namespace: env.DEEP_MEMORY_NAMESPACE?.trim() || undefined,
+            session_id: sessionId,
+            async: true,
+          },
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (isOverloadLikeError(message)) {
+          log.warn({ err: message }, "deep-memory overloaded during forget; backing off");
+          await sleep(env.DEEP_MEMORY_BACKOFF_MS);
+          // Do not advance tombstoneSinceMs so we retry later.
+          throw err;
+        }
+        throw err;
+      }
       log.info(
         { file_id: item.file_id, sessionId, deleted_at_ms: item.deleted_at_ms, res },
         "forgot tombstoned file",
@@ -402,18 +429,48 @@ async function main(): Promise<void> {
             continue;
           }
           const messages = buildDeepMemoryMessages({ file, truncated, chunks });
-          const updateRes = await fetchJson<unknown>({
-            url: `${deepBaseUrl}/update_memory_index`,
-            method: "POST",
-            apiKey: env.DEEP_MEMORY_API_KEY,
-            timeoutMs: env.DEEP_MEMORY_TIMEOUT_MS,
-            body: {
-              namespace: env.DEEP_MEMORY_NAMESPACE?.trim() || undefined,
-              session_id: sessionId,
-              messages,
-              async: env.DEEP_MEMORY_ASYNC,
-            },
-          });
+          let updateRes: unknown;
+          try {
+            updateRes = await fetchJson<unknown>({
+              url: `${deepBaseUrl}/update_memory_index`,
+              method: "POST",
+              apiKey: env.DEEP_MEMORY_API_KEY,
+              timeoutMs: env.DEEP_MEMORY_TIMEOUT_MS,
+              body: {
+                namespace: env.DEEP_MEMORY_NAMESPACE?.trim() || undefined,
+                session_id: sessionId,
+                messages,
+                async: env.DEEP_MEMORY_ASYNC,
+              },
+            });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (isOverloadLikeError(message)) {
+              const annotations = {
+                rustfs_worker: {
+                  version: 1,
+                  indexed_at_ms: Date.now(),
+                  deep_memory: {
+                    base_url: deepBaseUrl,
+                    namespace: env.DEEP_MEMORY_NAMESPACE?.trim() || undefined,
+                    session_id: sessionId,
+                    error: message,
+                    overloaded: true,
+                  },
+                },
+              };
+              await fetchJson({
+                url: `${rustfsBaseUrl}/v1/files/${encodeURIComponent(file.file_id)}/annotations`,
+                method: "POST",
+                apiKey: env.RUSTFS_API_KEY,
+                timeoutMs: env.DEEP_MEMORY_TIMEOUT_MS,
+                body: { annotations, source: "rustfs-worker" },
+              }).catch(() => {});
+              fileLog.warn({ err: message }, "deep-memory overloaded; backing off");
+              await sleep(env.DEEP_MEMORY_BACKOFF_MS);
+            }
+            throw err;
+          }
 
           const annotations = {
             rustfs_worker: {
