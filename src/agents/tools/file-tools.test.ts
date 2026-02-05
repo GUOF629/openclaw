@@ -107,3 +107,31 @@ describe("file_search tool schema", () => {
     expect(props).toHaveProperty("extractStatus");
   });
 });
+
+describe("file_search clarify behavior", () => {
+  test("close semantic scores triggers clarify with topic hint when present", async () => {
+    const mod = await import("./file-tools.js");
+    const clarify = (mod as unknown as { __test__?: { buildClarify?: unknown } }).__test__
+      ?.buildClarify as
+      | ((params: {
+          candidates: Array<{
+            semanticScore?: number;
+            semanticTopics?: string[];
+            filename: string;
+          }>;
+          includeSemantic: boolean;
+        }) => { required: boolean; reasons: string[]; questions: string[] } | undefined)
+      | undefined;
+    expect(typeof clarify).toBe("function");
+    const out = clarify?.({
+      includeSemantic: true,
+      candidates: [
+        { filename: "a.md", semanticScore: 10, semanticTopics: ["标书", "报价"] },
+        { filename: "b.md", semanticScore: 9.8, semanticTopics: ["报告", "复盘"] },
+      ],
+    });
+    expect(out?.required).toBe(true);
+    expect(out?.reasons).toContain("close_semantic_scores");
+    expect(out?.questions.join("\n")).toContain("候选1主题");
+  });
+});

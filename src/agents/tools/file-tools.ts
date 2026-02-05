@@ -696,3 +696,10 @@ export function createFileIngestTool(options: {
     },
   };
 }
+
+export const __test__ = {
+  buildClarify,
+  buildCandidates,
+  readIngestHintsFromAnnotations,
+  readSemanticsFromAnnotations,
+};
