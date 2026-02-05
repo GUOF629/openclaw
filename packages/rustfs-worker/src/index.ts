@@ -65,6 +65,11 @@ function buildAnnotationsV1(params: {
     memoryIdsTruncated?: boolean;
   };
   extraction: ExtractionResultV1;
+  semantics?: {
+    topics?: string[];
+    entities?: string[];
+    summary?: string;
+  };
 }): Record<string, unknown> {
   const base =
     params.existingAnnotations && typeof params.existingAnnotations === "object"
@@ -94,6 +99,25 @@ function buildAnnotationsV1(params: {
       kind: ingestKind || undefined,
       hint: ingestHint || undefined,
       tags: ingestTags && ingestTags.length > 0 ? ingestTags : undefined,
+    },
+    semantics: {
+      topics: params.semantics?.topics,
+      entities: params.semantics?.entities,
+      summary: params.semantics?.summary,
+      updated_at_ms:
+        params.semantics &&
+        ((params.semantics.topics && params.semantics.topics.length > 0) ||
+          (params.semantics.entities && params.semantics.entities.length > 0) ||
+          (params.semantics.summary && params.semantics.summary.length > 0))
+          ? Date.now()
+          : undefined,
+      source:
+        params.semantics &&
+        ((params.semantics.topics && params.semantics.topics.length > 0) ||
+          (params.semantics.entities && params.semantics.entities.length > 0) ||
+          (params.semantics.summary && params.semantics.summary.length > 0))
+          ? "deep-memory"
+          : undefined,
     },
     // Keep legacy fields for compatibility; downstream can migrate gradually.
     rustfs_worker: {
@@ -173,6 +197,11 @@ const EnvSchema = z.object({
 
   // Backoff when deep-memory is overloaded.
   DEEP_MEMORY_BACKOFF_MS: z.coerce.number().int().positive().default(10_000),
+
+  // Optional: after indexing, ask deep-memory for session-level semantics (topics/entities/summary).
+  DEEP_MEMORY_INSPECT_ENABLED: z.coerce.boolean().default(false),
+  DEEP_MEMORY_INSPECT_LIMIT: z.coerce.number().int().positive().max(1000).default(100),
+  DEEP_MEMORY_INSPECT_INCLUDE_CONTENT: z.coerce.boolean().default(false),
 });
 
 function readStringArray(value: unknown, max: number): string[] | undefined {
@@ -199,6 +228,39 @@ function extractMemoryIdsFromUpdateResponse(updateRes: unknown): {
   const truncated =
     typeof r.memory_ids_truncated === "boolean" ? r.memory_ids_truncated : undefined;
   return { ids, truncated };
+}
+
+function extractSessionSemanticsFromInspectResponse(inspectRes: unknown): {
+  topics?: string[];
+  entities?: string[];
+  summary?: string;
+} {
+  if (!inspectRes || typeof inspectRes !== "object") {
+    return {};
+  }
+  const r = inspectRes as Record<string, unknown>;
+  const topicsRaw = r.topics;
+  const entitiesRaw = r.entities;
+  const topics =
+    Array.isArray(topicsRaw) && topicsRaw.every((t) => t && typeof t === "object")
+      ? (topicsRaw as Array<Record<string, unknown>>)
+          .map((t) => (typeof t.name === "string" ? t.name.trim() : ""))
+          .filter(Boolean)
+          .slice(0, 20)
+      : undefined;
+  const entities =
+    Array.isArray(entitiesRaw) && entitiesRaw.every((t) => t && typeof t === "object")
+      ? (entitiesRaw as Array<Record<string, unknown>>)
+          .map((t) => (typeof t.name === "string" ? t.name.trim() : ""))
+          .filter(Boolean)
+          .slice(0, 20)
+      : undefined;
+  const summary = typeof r.summary === "string" ? r.summary.trim().slice(0, 1200) : undefined;
+  return {
+    topics: topics && topics.length > 0 ? topics : undefined,
+    entities: entities && entities.length > 0 ? entities : undefined,
+    summary: summary && summary.length > 0 ? summary : undefined,
+  };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -1412,6 +1474,7 @@ async function main(): Promise<void> {
                   overloaded: true,
                 },
                 extraction,
+                semantics: undefined,
               });
               await fetchJson({
                 url: `${rustfsBaseUrl}/v1/files/${encodeURIComponent(file.file_id)}/annotations`,
@@ -1429,6 +1492,33 @@ async function main(): Promise<void> {
 
           const tAnno0 = Date.now();
           const memIds = extractMemoryIdsFromUpdateResponse(updateRes);
+
+          let semantics: { topics?: string[]; entities?: string[]; summary?: string } | undefined;
+          if (env.DEEP_MEMORY_INSPECT_ENABLED) {
+            try {
+              const inspectRes = await fetchJson<unknown>({
+                url: `${deepBaseUrl}/session/inspect`,
+                method: "POST",
+                apiKey: env.DEEP_MEMORY_API_KEY,
+                timeoutMs: env.DEEP_MEMORY_TIMEOUT_MS,
+                body: {
+                  namespace: env.DEEP_MEMORY_NAMESPACE?.trim() || undefined,
+                  session_id: sessionId,
+                  limit: env.DEEP_MEMORY_INSPECT_LIMIT,
+                  include_content: env.DEEP_MEMORY_INSPECT_INCLUDE_CONTENT,
+                },
+              });
+              semantics = extractSessionSemanticsFromInspectResponse(inspectRes);
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              if (isOverloadLikeError(message)) {
+                overloadHits += 1;
+                fileLog.warn({ err: message }, "deep-memory overloaded during session inspect");
+              } else {
+                fileLog.warn({ err: message }, "session inspect failed");
+              }
+            }
+          }
           const annotations = buildAnnotationsV1({
             file,
             existingAnnotations: file.annotations,
@@ -1441,6 +1531,7 @@ async function main(): Promise<void> {
               memoryIdsTruncated: memIds.truncated,
             },
             extraction,
+            semantics,
           });
 
           await fetchJson({
