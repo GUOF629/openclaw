@@ -210,11 +210,17 @@ services:
       DEEP_MEMORY_NAMESPACE: "${OPENCLAW_DEEPMEM_NAMESPACE:-}"
       DEEP_MEMORY_ASYNC: "${OPENCLAW_DEEPMEM_WORKER_ASYNC:-true}"
       DEEP_MEMORY_TIMEOUT_MS: "${OPENCLAW_DEEPMEM_WORKER_TIMEOUT_MS:-30000}"
+      DEEP_MEMORY_CHUNK_MAX_CHARS: "${OPENCLAW_DEEPMEM_WORKER_CHUNK_MAX_CHARS:-3500}"
+      DEEP_MEMORY_CHUNK_OVERLAP_CHARS: "${OPENCLAW_DEEPMEM_WORKER_CHUNK_OVERLAP_CHARS:-200}"
+      DEEP_MEMORY_BACKOFF_MS: "${OPENCLAW_DEEPMEM_WORKER_BACKOFF_MS:-10000}"
+      WORKER_STATE_PATH: "${OPENCLAW_RUSTFS_WORKER_STATE_PATH:-/data/worker/state.json}"
     depends_on:
       rustfs:
         condition: service_healthy
       deep-memory-server-prod:
         condition: service_healthy
+    volumes:
+      - rustfs_data:/data
     restart: unless-stopped
 
 volumes:
