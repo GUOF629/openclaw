@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import pdfParse from "pdf-parse";
 import pino from "pino";
 import { z } from "zod";
 
@@ -201,6 +202,14 @@ function isCodeLike(_mime: string | undefined, filename: string): boolean {
   ].includes(lang);
 }
 
+function isPdfLike(mime: string | undefined, filename: string): boolean {
+  const m = (mime ?? "").toLowerCase().trim();
+  if (m === "application/pdf") {
+    return true;
+  }
+  return filename.toLowerCase().endsWith(".pdf");
+}
+
 function decodeHtmlEntities(input: string): string {
   return input
     .replaceAll("&nbsp;", " ")
@@ -321,6 +330,9 @@ function extractHtmlLike(params: {
 function guessDocType(mime: string | undefined, filename: string): string {
   const m = (mime ?? "").toLowerCase().trim();
   const lower = filename.toLowerCase();
+  if (m === "application/pdf" || lower.endsWith(".pdf")) {
+    return "pdf";
+  }
   if (
     m === "text/html" ||
     m === "application/xhtml+xml" ||
@@ -671,6 +683,99 @@ function extractCodeLike(params: {
   };
 }
 
+async function extractPdfLike(params: {
+  file: RustFsFileMeta;
+  bytes: Uint8Array;
+  truncated: boolean;
+  chunkMaxChars: number;
+  chunkOverlapChars: number;
+}): Promise<ExtractionResultV1> {
+  const warnings: string[] = [];
+  const pages: string[] = [];
+  const buf = Buffer.from(params.bytes);
+  const maxChars = Math.max(500, params.chunkMaxChars);
+  const overlap = Math.max(0, Math.min(params.chunkOverlapChars, Math.max(0, maxChars - 100)));
+  try {
+    await pdfParse(buf, {
+      pagerender: async (pageData: unknown) => {
+        const page = pageData as {
+          getTextContent: () => Promise<{ items: Array<{ str?: string }> }>;
+        };
+        const tc = await page.getTextContent();
+        const text = (tc.items ?? [])
+          .map((it) => (typeof it?.str === "string" ? it.str : ""))
+          .filter(Boolean)
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim();
+        pages.push(text);
+        return text;
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    warnings.push(`pdf_parse_failed:${message}`);
+    return {
+      schema_version: 1,
+      docTypeGuess: "pdf",
+      languageGuess: undefined,
+      segments: [],
+      warnings,
+      stats: {
+        bytes: params.bytes.length,
+        chars: 0,
+        segments: 0,
+        truncated: params.truncated,
+      },
+    };
+  }
+
+  if (pages.every((p) => !p.trim())) {
+    warnings.push("empty_pdf_text");
+  }
+
+  const segments: ExtractionSegmentV1[] = [];
+  const totalPages = pages.length || 1;
+  for (let pi = 0; pi < pages.length; pi += 1) {
+    const pageText = pages[pi] ?? "";
+    if (!pageText.trim()) {
+      continue;
+    }
+    const chunks = splitIntoChunks({ text: pageText, maxChars, overlapChars: overlap });
+    for (let ci = 0; ci < chunks.length; ci += 1) {
+      const c = chunks[ci];
+      if (!c) {
+        continue;
+      }
+      segments.push({
+        text: c.text,
+        locator: {
+          kind: "page",
+          index: pi + 1,
+          total: totalPages,
+          label: `page ${pi + 1}`,
+          startChar: c.startChar,
+          endChar: c.endChar,
+        },
+      });
+    }
+  }
+
+  return {
+    schema_version: 1,
+    docTypeGuess: "pdf",
+    languageGuess: undefined,
+    segments,
+    warnings,
+    stats: {
+      bytes: params.bytes.length,
+      chars: pages.reduce((sum, p) => sum + p.length, 0),
+      segments: segments.length,
+      truncated: params.truncated,
+    },
+  };
+}
+
 function buildDeepMemoryMessages(params: {
   file: RustFsFileMeta;
   extraction: ExtractionResultV1;
@@ -865,7 +970,8 @@ async function main(): Promise<void> {
           const canText = isSupportedTextLike(file.mime ?? undefined, file.filename);
           const canHtml = isHtmlLike(file.mime ?? undefined, file.filename);
           const canCode = isCodeLike(file.mime ?? undefined, file.filename);
-          if (!canText && !canHtml && !canCode) {
+          const canPdf = isPdfLike(file.mime ?? undefined, file.filename);
+          if (!canText && !canHtml && !canCode && !canPdf) {
             await fetchJson({
               url: `${rustfsBaseUrl}/v1/files/${encodeURIComponent(file.file_id)}/extract_status`,
               method: "POST",
@@ -887,32 +993,40 @@ async function main(): Promise<void> {
           const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
 
           const sessionId = `rustfs:file:${file.file_id}`;
-          const extraction = canHtml
-            ? extractHtmlLike({
+          const extraction = canPdf
+            ? await extractPdfLike({
                 file,
-                html: text,
-                bytes: bytes.length,
+                bytes,
                 truncated,
                 chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
                 chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
               })
-            : canCode
-              ? extractCodeLike({
+            : canHtml
+              ? extractHtmlLike({
                   file,
-                  code: text,
+                  html: text,
                   bytes: bytes.length,
                   truncated,
                   chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
                   chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
                 })
-              : extractTextLike({
-                  file,
-                  text,
-                  bytes: bytes.length,
-                  truncated,
-                  chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
-                  chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
-                });
+              : canCode
+                ? extractCodeLike({
+                    file,
+                    code: text,
+                    bytes: bytes.length,
+                    truncated,
+                    chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
+                    chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
+                  })
+                : extractTextLike({
+                    file,
+                    text,
+                    bytes: bytes.length,
+                    truncated,
+                    chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
+                    chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
+                  });
           if (extraction.segments.length === 0) {
             await fetchJson({
               url: `${rustfsBaseUrl}/v1/files/${encodeURIComponent(file.file_id)}/extract_status`,
