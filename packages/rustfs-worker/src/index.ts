@@ -86,7 +86,7 @@ function buildAnnotationsV1(params: {
     },
     extraction: {
       status: params.deepMemory.error ? "error" : "indexed",
-      extractor: "rustfs-worker:textlike:v1",
+      extractor: `rustfs-worker:${params.extraction.docTypeGuess}:v1`,
       attempt: params.file.extract_attempt ?? undefined,
       last_error: params.deepMemory.error ?? undefined,
       warnings: params.extraction.warnings,
@@ -173,9 +173,143 @@ function isSupportedTextLike(mime: string | undefined, filename: string): boolea
   );
 }
 
+function isHtmlLike(mime: string | undefined, filename: string): boolean {
+  const m = (mime ?? "").toLowerCase().trim();
+  if (m === "text/html" || m === "application/xhtml+xml") {
+    return true;
+  }
+  const lower = filename.toLowerCase();
+  return lower.endsWith(".html") || lower.endsWith(".htm") || lower.endsWith(".xhtml");
+}
+
+function decodeHtmlEntities(input: string): string {
+  return input
+    .replaceAll("&nbsp;", " ")
+    .replaceAll("&amp;", "&")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#39;", "'")
+    .replace(/&#(\d+);/g, (_m, n) => {
+      const code = Number(n);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : "";
+    });
+}
+
+function extractHtmlLike(params: {
+  file: RustFsFileMeta;
+  html: string;
+  bytes: number;
+  truncated: boolean;
+  chunkMaxChars: number;
+  chunkOverlapChars: number;
+}): ExtractionResultV1 {
+  const warnings: string[] = [];
+  const raw = params.html;
+  const titleMatch = raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const title = titleMatch ? decodeHtmlEntities(titleMatch[1]).replace(/\s+/g, " ").trim() : "";
+
+  let body = raw;
+  body = body.replace(/<script[\s\S]*?<\/script>/gi, "\n");
+  body = body.replace(/<style[\s\S]*?<\/style>/gi, "\n");
+  body = body.replace(/<noscript[\s\S]*?<\/noscript>/gi, "\n");
+
+  // Preserve headings as section markers.
+  body = body.replace(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi, (_m, lvl, text) => {
+    const t = decodeHtmlEntities(String(text))
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return `\n\n#${"#".repeat(Math.max(0, Number(lvl) - 1))} ${t}\n\n`;
+  });
+
+  // Newlines for common block separators.
+  body = body.replace(/<br\s*\/?>/gi, "\n");
+  body = body.replace(/<\/(p|div|section|article|header|footer|li|ul|ol|table|tr)>/gi, "\n");
+  body = body.replace(/<(p|div|section|article|header|footer|li|ul|ol|table|tr)[^>]*>/gi, "\n");
+
+  // Strip tags and decode entities.
+  body = decodeHtmlEntities(body.replace(/<[^>]+>/g, " "));
+  body = body.replace(/\r\n/g, "\n");
+  body = body.replace(/[ \t]+\n/g, "\n");
+  body = body.replace(/\n{3,}/g, "\n\n").trim();
+
+  if (!body) {
+    warnings.push("empty_html_body");
+  }
+
+  const blocks = body
+    .split(/\n{2,}/g)
+    .map((b) => b.trim())
+    .filter(Boolean);
+  const segments: ExtractionSegmentV1[] = [];
+  let currentLabel: string | undefined = title || undefined;
+
+  for (const block of blocks) {
+    if (block.startsWith("#")) {
+      currentLabel = block.replace(/^#+\s*/, "").trim() || currentLabel;
+      continue;
+    }
+    const chunks = splitIntoChunks({
+      text: block,
+      maxChars: params.chunkMaxChars,
+      overlapChars: params.chunkOverlapChars,
+    });
+    for (let i = 0; i < chunks.length; i += 1) {
+      const c = chunks[i];
+      if (!c) {
+        continue;
+      }
+      segments.push({
+        text: c.text,
+        locator: {
+          kind: "section",
+          index: segments.length + 1,
+          total: 0, // set below
+          label: currentLabel,
+          startChar: c.startChar,
+          endChar: c.endChar,
+        },
+      });
+    }
+  }
+  for (let i = 0; i < segments.length; i += 1) {
+    const seg = segments[i];
+    if (!seg) {
+      continue;
+    }
+    if (seg.locator) {
+      seg.locator.index = i + 1;
+      seg.locator.total = segments.length;
+    }
+  }
+
+  return {
+    schema_version: 1,
+    docTypeGuess: "html",
+    languageGuess: "html",
+    segments,
+    warnings,
+    stats: {
+      bytes: params.bytes,
+      chars: raw.length,
+      segments: segments.length,
+      truncated: params.truncated,
+    },
+  };
+}
+
 function guessDocType(mime: string | undefined, filename: string): string {
   const m = (mime ?? "").toLowerCase().trim();
   const lower = filename.toLowerCase();
+  if (
+    m === "text/html" ||
+    m === "application/xhtml+xml" ||
+    lower.endsWith(".html") ||
+    lower.endsWith(".htm")
+  ) {
+    return "html";
+  }
   if (m.includes("markdown") || lower.endsWith(".md") || lower.endsWith(".markdown")) {
     return "markdown";
   }
@@ -574,7 +708,9 @@ async function main(): Promise<void> {
       for (const file of items) {
         const fileLog = log.child({ file_id: file.file_id, filename: file.filename });
         try {
-          if (!isSupportedTextLike(file.mime ?? undefined, file.filename)) {
+          const canText = isSupportedTextLike(file.mime ?? undefined, file.filename);
+          const canHtml = isHtmlLike(file.mime ?? undefined, file.filename);
+          if (!canText && !canHtml) {
             await fetchJson({
               url: `${rustfsBaseUrl}/v1/files/${encodeURIComponent(file.file_id)}/extract_status`,
               method: "POST",
@@ -596,14 +732,23 @@ async function main(): Promise<void> {
           const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
 
           const sessionId = `rustfs:file:${file.file_id}`;
-          const extraction = extractTextLike({
-            file,
-            text,
-            bytes: bytes.length,
-            truncated,
-            chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
-            chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
-          });
+          const extraction = canHtml
+            ? extractHtmlLike({
+                file,
+                html: text,
+                bytes: bytes.length,
+                truncated,
+                chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
+                chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
+              })
+            : extractTextLike({
+                file,
+                text,
+                bytes: bytes.length,
+                truncated,
+                chunkMaxChars: env.DEEP_MEMORY_CHUNK_MAX_CHARS,
+                chunkOverlapChars: env.DEEP_MEMORY_CHUNK_OVERLAP_CHARS,
+              });
           if (extraction.segments.length === 0) {
             await fetchJson({
               url: `${rustfsBaseUrl}/v1/files/${encodeURIComponent(file.file_id)}/extract_status`,
