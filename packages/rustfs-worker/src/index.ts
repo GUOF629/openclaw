@@ -299,18 +299,20 @@ async function main(): Promise<void> {
 
   while (true) {
     try {
-      const pendingUrl = new URL(`${rustfsBaseUrl}/v1/files/pending_extract`);
-      if (env.RUSTFS_TENANT_ID?.trim()) {
-        pendingUrl.searchParams.set("tenant_id", env.RUSTFS_TENANT_ID.trim());
-      }
-      pendingUrl.searchParams.set("limit", String(env.RUSTFS_PENDING_LIMIT));
-      pendingUrl.searchParams.set("lease_ms", String(env.RUSTFS_LEASE_MS));
-
-      const pending = await fetchJson<{ ok: boolean; items: RustFsFileMeta[] }>({
-        url: pendingUrl.toString(),
-        method: "GET",
+      const pending = await fetchJson<{
+        ok: boolean;
+        items: RustFsFileMeta[];
+        claimed_at_ms?: number;
+      }>({
+        url: `${rustfsBaseUrl}/v1/files/claim_extract`,
+        method: "POST",
         apiKey: env.RUSTFS_API_KEY,
         timeoutMs: env.DEEP_MEMORY_TIMEOUT_MS,
+        body: {
+          tenant_id: env.RUSTFS_TENANT_ID?.trim() || undefined,
+          limit: env.RUSTFS_PENDING_LIMIT,
+          lease_ms: env.RUSTFS_LEASE_MS,
+        },
       });
 
       const items = pending.items ?? [];
@@ -329,15 +331,6 @@ async function main(): Promise<void> {
       for (const file of items) {
         const fileLog = log.child({ file_id: file.file_id, filename: file.filename });
         try {
-          // Lease the job.
-          await fetchJson({
-            url: `${rustfsBaseUrl}/v1/files/${encodeURIComponent(file.file_id)}/extract_status`,
-            method: "POST",
-            apiKey: env.RUSTFS_API_KEY,
-            timeoutMs: env.DEEP_MEMORY_TIMEOUT_MS,
-            body: { status: "processing" },
-          });
-
           if (!isSupportedTextLike(file.mime ?? undefined, file.filename)) {
             await fetchJson({
               url: `${rustfsBaseUrl}/v1/files/${encodeURIComponent(file.file_id)}/extract_status`,
