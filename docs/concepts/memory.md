@@ -13,6 +13,9 @@ source of truth; the model only "remembers" what gets written to disk.
 Memory search tools are provided by the active memory plugin (default:
 `memory-core`). Disable memory plugins with `plugins.slots.memory = "none"`.
 
+OpenClaw also supports an optional **deep memory** backend (external service with
+vector + graph storage) for cross-session recall. See [Deep memory](/concepts/deep-memory).
+
 ## Memory files (Markdown)
 
 The default workspace layout uses two memory layers:

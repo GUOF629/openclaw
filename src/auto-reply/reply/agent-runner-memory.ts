@@ -14,6 +14,7 @@ import {
   type SessionEntry,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import { considerDeepMemoryUpdateNearCompaction } from "../../deep-memory/update-scheduler.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
@@ -74,6 +75,30 @@ export async function runMemoryFlushIfNeeded(params: {
       reserveTokensFloor: memoryFlushSettings.reserveTokensFloor,
       softThresholdTokens: memoryFlushSettings.softThresholdTokens,
     });
+
+  // Trigger #3 (deep memory): nearing compaction => enqueue deep memory update (best-effort).
+  // This is intentionally decoupled from workspace writability (deep-memory reads transcripts on gateway).
+  try {
+    considerDeepMemoryUpdateNearCompaction({
+      cfg: params.cfg,
+      agentId: params.followupRun.run.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.followupRun.run.sessionId,
+      sessionFile: params.followupRun.run.sessionFile,
+      storePath: params.storePath,
+      compactionCount:
+        params.sessionEntry?.compactionCount ??
+        (params.sessionKey ? params.sessionStore?.[params.sessionKey]?.compactionCount : 0) ??
+        0,
+      deepMemoryNearCompactionCount:
+        params.sessionEntry?.deepMemoryNearCompactionCount ??
+        (params.sessionKey
+          ? params.sessionStore?.[params.sessionKey]?.deepMemoryNearCompactionCount
+          : undefined),
+    });
+  } catch {
+    // Best-effort; do not affect the main reply path.
+  }
 
   if (!shouldFlushMemory) {
     return params.sessionEntry;

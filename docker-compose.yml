@@ -44,3 +44,187 @@ services:
     tty: true
     init: true
     entrypoint: ["node", "dist/index.js"]
+
+  # Deep memory stack (optional). Enable via: docker compose --profile deep-memory up
+  qdrant:
+    profiles: ["deep-memory"]
+    image: qdrant/qdrant:v1.13.4
+    ports:
+      - "${OPENCLAW_QDRANT_PORT:-6333}:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  neo4j:
+    profiles: ["deep-memory"]
+    image: neo4j:5.26
+    environment:
+      NEO4J_AUTH: "neo4j/${OPENCLAW_NEO4J_PASSWORD:-openclaw}"
+      NEO4J_server_memory_pagecache_size: "512M"
+      NEO4J_server_memory_heap_initial__size: "512M"
+      NEO4J_server_memory_heap_max__size: "512M"
+    ports:
+      - "${OPENCLAW_NEO4J_HTTP_PORT:-7474}:7474"
+      - "${OPENCLAW_NEO4J_BOLT_PORT:-7687}:7687"
+    volumes:
+      - neo4j_data:/data
+    restart: unless-stopped
+
+  deep-memory-server:
+    profiles: ["deep-memory"]
+    image: node:22-alpine
+    working_dir: /app
+    environment:
+      PORT: 8088
+      HOST: 0.0.0.0
+      REQUIRE_API_KEY: "${OPENCLAW_DEEPMEM_REQUIRE_API_KEY:-false}"
+      API_KEYS_JSON: "${OPENCLAW_DEEPMEM_API_KEYS_JSON:-}"
+      QDRANT_URL: "http://qdrant:6333"
+      QDRANT_COLLECTION: "${OPENCLAW_DEEPMEM_COLLECTION:-openclaw_memories}"
+      VECTOR_DIMS: "${OPENCLAW_DEEPMEM_DIMS:-384}"
+      MIN_SEMANTIC_SCORE: "${OPENCLAW_DEEPMEM_MIN_SEMANTIC_SCORE:-0.6}"
+      NEO4J_URI: "bolt://neo4j:7687"
+      NEO4J_USER: "neo4j"
+      NEO4J_PASSWORD: "${OPENCLAW_NEO4J_PASSWORD:-openclaw}"
+      LOG_LEVEL: "${OPENCLAW_DEEPMEM_LOG_LEVEL:-info}"
+      RETRIEVE_CACHE_TTL_MS: "${OPENCLAW_DEEPMEM_CACHE_TTL_MS:-300000}"
+      RETRIEVE_CACHE_MAX: "${OPENCLAW_DEEPMEM_CACHE_MAX:-500}"
+      UPDATE_CONCURRENCY: "${OPENCLAW_DEEPMEM_UPDATE_CONCURRENCY:-1}"
+      EMBEDDING_MODEL: "${OPENCLAW_DEEPMEM_EMBEDDING_MODEL:-Xenova/bge-small-en-v1.5}"
+    volumes:
+      - ./:/app
+    command:
+      [
+        "sh",
+        "-lc",
+        "corepack enable && pnpm -s install && pnpm -s --dir packages/deep-memory-server dev",
+      ]
+    ports:
+      - "${OPENCLAW_DEEPMEM_PORT:-8088}:8088"
+    depends_on:
+      - qdrant
+      - neo4j
+    restart: unless-stopped
+
+  # Production-oriented deep-memory-server (built image + persistent queue dir).
+  # Enable via: docker compose --profile deep-memory-prod up -d
+  deep-memory-server-prod:
+    profiles: ["deep-memory-prod"]
+    build:
+      context: .
+      dockerfile: packages/deep-memory-server/Dockerfile
+    environment:
+      PORT: 8088
+      HOST: 0.0.0.0
+      REQUIRE_API_KEY: "${OPENCLAW_DEEPMEM_REQUIRE_API_KEY:-true}"
+      API_KEYS_JSON: "${OPENCLAW_DEEPMEM_API_KEYS_JSON:-}"
+      RATE_LIMIT_ENABLED: "${OPENCLAW_DEEPMEM_RATE_LIMIT_ENABLED:-true}"
+      RATE_LIMIT_WINDOW_MS: "${OPENCLAW_DEEPMEM_RATE_LIMIT_WINDOW_MS:-60000}"
+      RATE_LIMIT_RETRIEVE_PER_WINDOW: "${OPENCLAW_DEEPMEM_RL_RETRIEVE:-300}"
+      RATE_LIMIT_UPDATE_PER_WINDOW: "${OPENCLAW_DEEPMEM_RL_UPDATE:-60}"
+      RATE_LIMIT_FORGET_PER_WINDOW: "${OPENCLAW_DEEPMEM_RL_FORGET:-10}"
+      RATE_LIMIT_QUEUE_ADMIN_PER_WINDOW: "${OPENCLAW_DEEPMEM_RL_QUEUE_ADMIN:-60}"
+      UPDATE_BACKLOG_REJECT_PENDING: "${OPENCLAW_DEEPMEM_BACKLOG_REJECT_PENDING:-2000}"
+      UPDATE_BACKLOG_RETRY_AFTER_SECONDS: "${OPENCLAW_DEEPMEM_BACKLOG_RETRY_AFTER_SECONDS:-30}"
+      QDRANT_URL: "http://qdrant:6333"
+      QDRANT_COLLECTION: "${OPENCLAW_DEEPMEM_COLLECTION:-openclaw_memories}"
+      VECTOR_DIMS: "${OPENCLAW_DEEPMEM_DIMS:-384}"
+      MIN_SEMANTIC_SCORE: "${OPENCLAW_DEEPMEM_MIN_SEMANTIC_SCORE:-0.6}"
+      NEO4J_URI: "bolt://neo4j:7687"
+      NEO4J_USER: "neo4j"
+      NEO4J_PASSWORD: "${OPENCLAW_NEO4J_PASSWORD:-openclaw}"
+      LOG_LEVEL: "${OPENCLAW_DEEPMEM_LOG_LEVEL:-info}"
+      RETRIEVE_CACHE_TTL_MS: "${OPENCLAW_DEEPMEM_CACHE_TTL_MS:-300000}"
+      RETRIEVE_CACHE_MAX: "${OPENCLAW_DEEPMEM_CACHE_MAX:-500}"
+      UPDATE_CONCURRENCY: "${OPENCLAW_DEEPMEM_UPDATE_CONCURRENCY:-1}"
+      EMBEDDING_MODEL: "${OPENCLAW_DEEPMEM_EMBEDDING_MODEL:-Xenova/bge-small-en-v1.5}"
+      QUEUE_DIR: "/data/queue"
+      AUDIT_LOG_PATH: "/data/audit/audit.jsonl"
+    volumes:
+      - deepmem_data:/data
+    ports:
+      - "${OPENCLAW_DEEPMEM_PORT:-8088}:8088"
+    depends_on:
+      - qdrant
+      - neo4j
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8088/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # RustFS (optional). Enable via: docker compose --profile rustfs up -d
+  rustfs:
+    profiles: ["rustfs"]
+    build:
+      context: .
+      dockerfile: packages/rustfs/Dockerfile
+    environment:
+      RUSTFS_PORT: 8099
+      RUSTFS_DATA_DIR: /data
+      RUSTFS_DB_PATH: /data/meta.db
+      RUSTFS_REQUIRE_API_KEY: "${OPENCLAW_RUSTFS_REQUIRE_API_KEY:-true}"
+      RUSTFS_API_KEYS_JSON: "${OPENCLAW_RUSTFS_API_KEYS_JSON:-}"
+      # Optional: enables encryption at rest for newly ingested files
+      RUSTFS_MASTER_KEY: "${OPENCLAW_RUSTFS_MASTER_KEY:-}"
+      # Required for public share links (HMAC signing). Keep this secret.
+      RUSTFS_SIGNING_KEY: "${OPENCLAW_RUSTFS_SIGNING_KEY:-}"
+      # Optional base URL used when returning share links (otherwise returns a relative path).
+      RUSTFS_PUBLIC_BASE_URL: "${OPENCLAW_RUSTFS_PUBLIC_BASE_URL:-}"
+      # Optional audit log (JSONL) for sensitive actions.
+      RUSTFS_AUDIT_LOG_PATH: "${OPENCLAW_RUSTFS_AUDIT_LOG_PATH:-/data/audit/audit.jsonl}"
+    ports:
+      - "${OPENCLAW_RUSTFS_PORT:-8099}:8099"
+    volumes:
+      - rustfs_data:/data
+    healthcheck:
+      test: ["CMD", "sh", "-lc", "curl -fsS http://127.0.0.1:8099/readyz >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # RustFS worker (optional). Enable via:
+  # docker compose --profile rustfs --profile deep-memory-prod --profile rustfs-worker up -d
+  rustfs-worker:
+    profiles: ["rustfs-worker"]
+    build:
+      context: .
+      dockerfile: packages/rustfs-worker/Dockerfile
+    environment:
+      RUSTFS_BASE_URL: "http://rustfs:8099"
+      RUSTFS_API_KEY: "${OPENCLAW_RUSTFS_WORKER_API_KEY:-}"
+      RUSTFS_POLL_INTERVAL_MS: "${OPENCLAW_RUSTFS_WORKER_POLL_INTERVAL_MS:-5000}"
+      RUSTFS_LEASE_MS: "${OPENCLAW_RUSTFS_WORKER_LEASE_MS:-300000}"
+      RUSTFS_PENDING_LIMIT: "${OPENCLAW_RUSTFS_WORKER_PENDING_LIMIT:-25}"
+      RUSTFS_MAX_DOWNLOAD_BYTES: "${OPENCLAW_RUSTFS_WORKER_MAX_DOWNLOAD_BYTES:-2097152}"
+      DEEP_MEMORY_BASE_URL: "http://deep-memory-server-prod:8088"
+      DEEP_MEMORY_API_KEY: "${OPENCLAW_DEEPMEM_WORKER_API_KEY:-}"
+      DEEP_MEMORY_NAMESPACE: "${OPENCLAW_DEEPMEM_NAMESPACE:-}"
+      DEEP_MEMORY_ASYNC: "${OPENCLAW_DEEPMEM_WORKER_ASYNC:-true}"
+      DEEP_MEMORY_TIMEOUT_MS: "${OPENCLAW_DEEPMEM_WORKER_TIMEOUT_MS:-30000}"
+      DEEP_MEMORY_CHUNK_MAX_CHARS: "${OPENCLAW_DEEPMEM_WORKER_CHUNK_MAX_CHARS:-3500}"
+      DEEP_MEMORY_CHUNK_OVERLAP_CHARS: "${OPENCLAW_DEEPMEM_WORKER_CHUNK_OVERLAP_CHARS:-200}"
+      DEEP_MEMORY_BACKOFF_MS: "${OPENCLAW_DEEPMEM_WORKER_BACKOFF_MS:-10000}"
+      WORKER_STATE_PATH: "${OPENCLAW_RUSTFS_WORKER_STATE_PATH:-/data/worker/state.json}"
+    depends_on:
+      rustfs:
+        condition: service_healthy
+      deep-memory-server-prod:
+        condition: service_healthy
+    volumes:
+      - rustfs_data:/data
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:
+  neo4j_data:
+  deepmem_data:
+  rustfs_data:

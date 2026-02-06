@@ -71,6 +71,8 @@ USER.md
 # local tooling
 .serena/
 
+# Rust build artifacts (RustFS)
+packages/rustfs/target/
 # Agent credentials and memory (NEVER COMMIT)
 memory/
 .agent/*.json

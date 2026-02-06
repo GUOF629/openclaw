@@ -323,6 +323,95 @@ export type MemorySearchConfig = {
   };
 };
 
+/**
+ * Deep memory configuration (optional).
+ *
+ * This is distinct from `memorySearch`:
+ * - memorySearch: vector/hybrid search over Markdown memory files (built-in)
+ * - deepMemory: external long-term memory service (graph/vector/importance), used for
+ *   programmatic per-turn context injection + async indexing.
+ */
+export type DeepMemoryConfig = {
+  /** Enable deep memory (default: false). */
+  enabled?: boolean;
+  /**
+   * Optional namespace / tenant key for isolation.
+   *
+   * Use this to prevent cross-user / cross-workspace memory mixing when multiple OpenClaw
+   * instances share the same deep-memory-server + stores.
+   */
+  namespace?: string;
+  /** Optional shared secret for deep-memory-server (sent as x-api-key). */
+  apiKey?: string;
+  /** Base URL for the deep memory service (e.g. http://127.0.0.1:8088). */
+  baseUrl?: string;
+  /** Timeout for deep memory HTTP calls (seconds). */
+  timeoutSeconds?: number;
+  /** Query-time retrieval settings (per-turn injection). */
+  retrieve?: {
+    /** Max memories to request/format (default: 10). */
+    maxMemories?: number;
+    /** Optional cache for retrieval results. */
+    cache?: {
+      enabled?: boolean;
+      /** Cache TTL in minutes (default: 5). */
+      ttlMinutes?: number;
+      /** Max cached entries (best-effort). */
+      maxEntries?: number;
+    };
+  };
+  /** Injection formatting and bounds. */
+  inject?: {
+    /** Max characters to inject into the system prompt (default: 4000). */
+    maxChars?: number;
+    /** Optional label for the injected block header. */
+    label?: string;
+  };
+  /** Update/indexing settings (async, best-effort). */
+  update?: {
+    /** Enable background updates (default: true when deepMemory.enabled). */
+    enabled?: boolean;
+    /** Transcript delta thresholds for batching (trigger #2). */
+    thresholds?: {
+      /** Minimum appended bytes before we enqueue an update. */
+      deltaBytes?: number;
+      /** Minimum appended JSONL lines before we enqueue an update. */
+      deltaMessages?: number;
+    };
+    /** Debounce window (ms) to coalesce rapid triggers (default: 5000). */
+    debounceMs?: number;
+    /** Trigger #3: enqueue an update when nearing auto-compaction (default: true). */
+    nearCompaction?: {
+      enabled?: boolean;
+    };
+  };
+};
+
+/**
+ * RustFS configuration (optional).
+ *
+ * RustFS is a session file archive service (durable storage + basic metadata search).
+ * It is intentionally separate from deep-memory-server.
+ */
+export type RustFsConfig = {
+  /** Enable RustFS integration (default: false). */
+  enabled?: boolean;
+  /**
+   * Tenant/project label for file isolation.
+   *
+   * In practice this can be a product name or project name; it maps to RustFS tenant_id.
+   */
+  project?: string;
+  /** Shared secret for RustFS (sent as x-api-key). */
+  apiKey?: string;
+  /** Base URL for RustFS (e.g. http://127.0.0.1:8099). */
+  baseUrl?: string;
+  /** Default TTL seconds for public share links (default: 300). */
+  linkTtlSeconds?: number;
+  /** Hard cap for uploads (bytes). Default is best-effort; RustFS also enforces its own limits. */
+  maxUploadBytes?: number;
+};
+
 export type ToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;

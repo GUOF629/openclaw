@@ -189,6 +189,22 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "management",
     }),
     defineChatCommand({
+      key: "forget",
+      nativeName: "forget",
+      description: "Delete deep memory by session or memory id (admin).",
+      textAlias: "/forget",
+      acceptsArgs: true,
+      category: "management",
+    }),
+    defineChatCommand({
+      key: "deepmemory",
+      nativeName: "deepmemory",
+      description: "Show deep-memory-server health/readiness/queue status (admin).",
+      textAliases: ["/deepmemory", "/deep-memory"],
+      acceptsArgs: true,
+      category: "status",
+    }),
+    defineChatCommand({
       key: "context",
       nativeName: "context",
       description: "Explain how context is built and used.",

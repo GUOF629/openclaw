@@ -412,6 +412,70 @@ export const MemorySearchSchema = z
   })
   .strict()
   .optional();
+
+export const DeepMemorySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    namespace: z.string().optional(),
+    apiKey: z.string().optional(),
+    baseUrl: z.string().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+    retrieve: z
+      .object({
+        maxMemories: z.number().int().positive().optional(),
+        cache: z
+          .object({
+            enabled: z.boolean().optional(),
+            ttlMinutes: z.number().int().nonnegative().optional(),
+            maxEntries: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    inject: z
+      .object({
+        maxChars: z.number().int().positive().optional(),
+        label: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    update: z
+      .object({
+        enabled: z.boolean().optional(),
+        thresholds: z
+          .object({
+            deltaBytes: z.number().int().nonnegative().optional(),
+            deltaMessages: z.number().int().nonnegative().optional(),
+          })
+          .strict()
+          .optional(),
+        debounceMs: z.number().int().nonnegative().optional(),
+        nearCompaction: z
+          .object({
+            enabled: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
+export const RustFsSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    project: z.string().optional(),
+    apiKey: z.string().optional(),
+    baseUrl: z.string().optional(),
+    linkTtlSeconds: z.number().int().positive().optional(),
+    maxUploadBytes: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
 export const AgentModelSchema = z.union([
   z.string(),
   z
@@ -431,6 +495,8 @@ export const AgentEntrySchema = z
     model: AgentModelSchema.optional(),
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
+    deepMemory: DeepMemorySchema,
+    rustfs: RustFsSchema,
     humanDelay: HumanDelaySchema.optional(),
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,

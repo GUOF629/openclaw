@@ -357,6 +357,8 @@ export async function runPreparedReply(
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
+    // Clean user input for deep memory retrieval/injection (do not include system/event prefixes).
+    deepMemoryUserInput: baseBodyTrimmed,
     enqueuedAt: Date.now(),
     // Originating channel for reply routing.
     originatingChannel: ctx.OriginatingChannel,

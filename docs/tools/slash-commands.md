@@ -67,6 +67,8 @@ Text + native (when enabled):
 - `/status` (show current status; includes provider usage/quota for the current model provider when available)
 - `/allowlist` (list/add/remove allowlist entries)
 - `/approve <id> allow-once|allow-always|deny` (resolve exec approval prompts)
+- `/forget [confirm]` (delete deep memory for the current session; **admin-only**; defaults to dry-run unless `confirm` is provided)
+- `/deepmemory status [details] [queue]` (deep memory server health/readiness/queue; **admin-only**; alias: `/deep-memory`)
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
 - `/whoami` (show your sender id; alias: `/id`)
 - `/subagents list|stop|log|info|send` (inspect, stop, log, or message sub-agent runs for the current session)
