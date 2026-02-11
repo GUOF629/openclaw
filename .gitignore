@@ -15,7 +15,6 @@ coverage
 ui/src/ui/__screenshots__/
 ui/playwright-report/
 ui/test-results/
-
 # Bun build artifacts
 *.bun-build
 apps/macos/.build/
@@ -64,6 +63,7 @@ apps/ios/*.mobileprovision
 
 # Local untracked files
 .local/
+.cursor/
 IDENTITY.md
 USER.md
 .tgz
