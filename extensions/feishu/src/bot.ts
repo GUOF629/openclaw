@@ -9,6 +9,7 @@ import {
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { extractPermissionError, type FeishuPermissionErrorInfo } from "./errors.js";
 import { downloadMessageResourceFeishu } from "./media.js";
 import { extractMentionTargets, extractMessageBody, isMentionForwardRequest } from "./mention.js";
 import {
@@ -21,48 +22,7 @@ import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
 
-// --- Permission error extraction ---
-// Extract permission grant URL from Feishu API error response.
-type PermissionError = {
-  code: number;
-  message: string;
-  grantUrl?: string;
-};
-
-function extractPermissionError(err: unknown): PermissionError | null {
-  if (!err || typeof err !== "object") {
-    return null;
-  }
-
-  // Axios error structure: err.response.data contains the Feishu error
-  const axiosErr = err as { response?: { data?: unknown } };
-  const data = axiosErr.response?.data;
-  if (!data || typeof data !== "object") {
-    return null;
-  }
-
-  const feishuErr = data as {
-    code?: number;
-    msg?: string;
-    error?: { permission_violations?: Array<{ uri?: string }> };
-  };
-
-  // Feishu permission error code: 99991672
-  if (feishuErr.code !== 99991672) {
-    return null;
-  }
-
-  // Extract the grant URL from the error message (contains the direct link)
-  const msg = feishuErr.msg ?? "";
-  const urlMatch = msg.match(/https:\/\/[^\s,]+\/app\/[^\s,]+/);
-  const grantUrl = urlMatch?.[0];
-
-  return {
-    code: feishuErr.code,
-    message: msg,
-    grantUrl,
-  };
-}
+type PermissionError = FeishuPermissionErrorInfo;
 
 // --- Sender name resolution (so the agent can distinguish who is speaking in group chats) ---
 // Cache display names by open_id to avoid an API call on every message.
@@ -329,23 +289,24 @@ async function resolveFeishuMediaList(params: {
   maxBytes: number;
   log?: (msg: string) => void;
   accountId?: string;
-}): Promise<FeishuMediaInfo[]> {
+}): Promise<{ media: FeishuMediaInfo[]; permissionError?: PermissionError }> {
   const { cfg, messageId, messageType, content, maxBytes, log, accountId } = params;
 
   // Only process media message types (including post for embedded images)
   const mediaTypes = ["image", "file", "audio", "video", "sticker", "post"];
   if (!mediaTypes.includes(messageType)) {
-    return [];
+    return { media: [] };
   }
 
   const out: FeishuMediaInfo[] = [];
+  let permissionError: PermissionError | undefined;
   const core = getFeishuRuntime();
 
   // Handle post (rich text) messages with embedded images
   if (messageType === "post") {
     const { imageKeys } = parsePostContent(content);
     if (imageKeys.length === 0) {
-      return [];
+      return { media: [] };
     }
 
     log?.(`feishu: post message contains ${imageKeys.length} embedded image(s)`);
@@ -381,17 +342,21 @@ async function resolveFeishuMediaList(params: {
 
         log?.(`feishu: downloaded embedded image ${imageKey}, saved to ${saved.path}`);
       } catch (err) {
+        const permErr = extractPermissionError(err);
+        if (permErr && !permissionError) {
+          permissionError = permErr;
+        }
         log?.(`feishu: failed to download embedded image ${imageKey}: ${String(err)}`);
       }
     }
 
-    return out;
+    return { media: out, permissionError };
   }
 
   // Handle other media types
   const mediaKeys = parseMediaKeys(content, messageType);
   if (!mediaKeys.imageKey && !mediaKeys.fileKey) {
-    return [];
+    return { media: [] };
   }
 
   try {
@@ -403,7 +368,7 @@ async function resolveFeishuMediaList(params: {
     // The image.get API is only for images uploaded via im/v1/images, not for message attachments
     const fileKey = mediaKeys.imageKey || mediaKeys.fileKey;
     if (!fileKey) {
-      return [];
+      return { media: [] };
     }
 
     const resourceType = messageType === "image" ? "image" : "file";
@@ -440,10 +405,14 @@ async function resolveFeishuMediaList(params: {
 
     log?.(`feishu: downloaded ${messageType} media, saved to ${saved.path}`);
   } catch (err) {
+    const permErr = extractPermissionError(err);
+    if (permErr) {
+      permissionError = permErr;
+    }
     log?.(`feishu: failed to download ${messageType} media: ${String(err)}`);
   }
 
-  return out;
+  return { media: out, permissionError };
 }
 
 /**
@@ -669,7 +638,7 @@ export async function handleFeishuMessage(params: {
 
     // Resolve media from message
     const mediaMaxBytes = (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024; // 30MB default
-    const mediaList = await resolveFeishuMediaList({
+    const mediaResult = await resolveFeishuMediaList({
       cfg,
       messageId: ctx.messageId,
       messageType: event.message.message_type,
@@ -678,6 +647,10 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
+    const mediaList = mediaResult.media;
+    if (mediaResult.permissionError && !permissionErrorForAgent) {
+      permissionErrorForAgent = mediaResult.permissionError;
+    }
     const mediaPayload = buildFeishuMediaPayload(mediaList);
 
     // Fetch quoted/replied message content if parentId exists

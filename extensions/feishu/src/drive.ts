@@ -1,8 +1,9 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { listEnabledFeishuAccounts } from "./accounts.js";
+import { resolveDefaultFeishuAccountId, resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
+import { extractPermissionError } from "./errors.js";
 import { resolveToolsConfig } from "./tools-config.js";
 
 // ============ Helpers ============
@@ -169,59 +170,58 @@ async function deleteFile(client: Lark.Client, fileToken: string, type: string) 
 // ============ Tool Registration ============
 
 export function registerFeishuDriveTools(api: OpenClawPluginApi) {
-  if (!api.config) {
-    api.logger.debug?.("feishu_drive: No config available, skipping drive tools");
-    return;
-  }
-
-  const accounts = listEnabledFeishuAccounts(api.config);
-  if (accounts.length === 0) {
-    api.logger.debug?.("feishu_drive: No Feishu accounts configured, skipping drive tools");
-    return;
-  }
-
-  const firstAccount = accounts[0];
-  const toolsCfg = resolveToolsConfig(firstAccount.config.tools);
-  if (!toolsCfg.drive) {
-    api.logger.debug?.("feishu_drive: drive tool disabled in config");
-    return;
-  }
-
-  const getClient = () => createFeishuClient(firstAccount);
-
   api.registerTool(
-    {
-      name: "feishu_drive",
-      label: "Feishu Drive",
-      description:
-        "Feishu cloud storage operations. Actions: list, info, create_folder, move, delete",
-      parameters: FeishuDriveSchema,
-      async execute(_toolCallId, params) {
-        const p = params as FeishuDriveParams;
-        try {
-          const client = getClient();
-          switch (p.action) {
-            case "list":
-              return json(await listFolder(client, p.folder_token));
-            case "info":
-              return json(await getFileInfo(client, p.file_token));
-            case "create_folder":
-              return json(await createFolder(client, p.name, p.folder_token));
-            case "move":
-              return json(await moveFile(client, p.file_token, p.type, p.folder_token));
-            case "delete":
-              return json(await deleteFile(client, p.file_token, p.type));
-            default:
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
-              return json({ error: `Unknown action: ${(p as any).action}` });
+    (ctx) => {
+      const cfg = ctx.config;
+      if (!cfg) {
+        return null;
+      }
+      const accountId = ctx.agentAccountId ?? resolveDefaultFeishuAccountId(cfg);
+      const account = resolveFeishuAccount({ cfg, accountId });
+      if (!account.enabled || !account.configured) {
+        return null;
+      }
+
+      const toolsCfg = resolveToolsConfig(account.config.tools);
+      if (!toolsCfg.drive) {
+        return null;
+      }
+
+      const client = createFeishuClient(account);
+      return {
+        name: "feishu_drive",
+        label: "Feishu Drive",
+        description:
+          "Feishu cloud storage operations. Actions: list, info, create_folder, move, delete. On permission errors, returns a grant URL when available.",
+        parameters: FeishuDriveSchema,
+        async execute(_toolCallId, params) {
+          const p = params as FeishuDriveParams;
+          try {
+            switch (p.action) {
+              case "list":
+                return json(await listFolder(client, p.folder_token));
+              case "info":
+                return json(await getFileInfo(client, p.file_token));
+              case "create_folder":
+                return json(await createFolder(client, p.name, p.folder_token));
+              case "move":
+                return json(await moveFile(client, p.file_token, p.type, p.folder_token));
+              case "delete":
+                return json(await deleteFile(client, p.file_token, p.type));
+              default:
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
+                return json({ error: `Unknown action: ${(p as any).action}` });
+            }
+          } catch (err) {
+            const permErr = extractPermissionError(err);
+            if (permErr) {
+              return json({ error: permErr.message, permission: permErr });
+            }
+            return json({ error: err instanceof Error ? err.message : String(err) });
           }
-        } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
-        }
-      },
+        },
+      };
     },
     { name: "feishu_drive" },
   );
-
-  api.logger.info?.(`feishu_drive: Registered feishu_drive tool`);
 }

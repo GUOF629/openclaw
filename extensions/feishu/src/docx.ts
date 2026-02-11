@@ -1,10 +1,12 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
+import path from "node:path";
 import { Readable } from "stream";
-import { listEnabledFeishuAccounts } from "./accounts.js";
+import { resolveDefaultFeishuAccountId, resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
+import { FeishuApiError, extractPermissionError } from "./errors.js";
 import { resolveToolsConfig } from "./tools-config.js";
 
 // ============ Helpers ============
@@ -229,7 +231,13 @@ async function readDoc(client: Lark.Client, docToken: string) {
   ]);
 
   if (contentRes.code !== 0) {
-    throw new Error(contentRes.msg);
+    throw new FeishuApiError({ code: contentRes.code, message: contentRes.msg });
+  }
+  if (infoRes.code !== 0) {
+    throw new FeishuApiError({ code: infoRes.code, message: infoRes.msg });
+  }
+  if (blocksRes.code !== 0) {
+    throw new FeishuApiError({ code: blocksRes.code, message: blocksRes.msg });
   }
 
   const blocks = blocksRes.data?.items ?? [];
@@ -397,7 +405,7 @@ async function exportDoc(
     path: { document_id: docToken },
   });
   if (infoRes.code !== 0) {
-    throw new Error(infoRes.msg);
+    throw new FeishuApiError({ code: infoRes.code, message: infoRes.msg });
   }
 
   const docTitle = infoRes.data?.document?.title || `feishu_doc_${docToken}`;
@@ -412,7 +420,7 @@ async function exportDoc(
   });
 
   if (exportRes.code !== 0) {
-    throw new Error(exportRes.msg);
+    throw new FeishuApiError({ code: exportRes.code, message: exportRes.msg });
   }
 
   // The export API returns a download URL
@@ -509,45 +517,47 @@ async function listAppScopes(client: Lark.Client) {
 // ============ Tool Registration ============
 
 export function registerFeishuDocTools(api: OpenClawPluginApi) {
-  if (!api.config) {
-    api.logger.debug?.("feishu_doc: No config available, skipping doc tools");
-    return;
-  }
+  api.registerTool(
+    (ctx) => {
+      const cfg = ctx.config;
+      if (!cfg) {
+        return null;
+      }
+      const accountId = ctx.agentAccountId ?? resolveDefaultFeishuAccountId(cfg);
+      const account = resolveFeishuAccount({ cfg, accountId });
+      if (!account.enabled || !account.configured) {
+        return null;
+      }
+      const toolsCfg = resolveToolsConfig(account.config.tools);
+      if (!toolsCfg.doc) {
+        return null;
+      }
 
-  // Check if any account is configured
-  const accounts = listEnabledFeishuAccounts(api.config);
-  if (accounts.length === 0) {
-    api.logger.debug?.("feishu_doc: No Feishu accounts configured, skipping doc tools");
-    return;
-  }
+      const client = createFeishuClient(account);
+      const defaultTargetDir = ctx.workspaceDir
+        ? path.join(ctx.workspaceDir, "downloads", "feishu")
+        : undefined;
 
-  // Use first account's config for tools configuration
-  const firstAccount = accounts[0];
-  const toolsCfg = resolveToolsConfig(firstAccount.config.tools);
-
-  // Helper to get client for the default account
-  const getClient = () => createFeishuClient(firstAccount);
-  const registered: string[] = [];
-
-  // Main document tool with action-based dispatch
-  if (toolsCfg.doc) {
-    api.registerTool(
-      {
+      return {
         name: "feishu_doc",
         label: "Feishu Doc",
         description:
-          "Feishu document operations. Actions: read, write, append, create, export, list_blocks, get_block, update_block, delete_block",
+          "Feishu document operations. Actions: read, write, append, create, export (saves to workspace for RustFS ingest), list_blocks, get_block, update_block, delete_block. On permission errors, returns a grant URL when available.",
         parameters: FeishuDocSchema,
         async execute(_toolCallId, params) {
           const p = params as FeishuDocParams;
           try {
-            const client = getClient();
             switch (p.action) {
               case "read":
                 return json(await readDoc(client, p.doc_token));
               case "export":
                 return json(
-                  await exportDoc(client, p.doc_token, p.target_dir, p.extract_to_memory),
+                  await exportDoc(
+                    client,
+                    p.doc_token,
+                    p.target_dir ?? defaultTargetDir,
+                    p.extract_to_memory ?? true,
+                  ),
                 );
               case "write":
                 return json(await writeDoc(client, p.doc_token, p.content));
@@ -568,19 +578,42 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                 return json({ error: `Unknown action: ${(p as any).action}` });
             }
           } catch (err) {
+            const permErr = extractPermissionError(err);
+            if (permErr) {
+              return json({
+                error: permErr.message,
+                permission: permErr,
+              });
+            }
+            if (err instanceof FeishuApiError) {
+              return json({ error: err.message, code: err.code, grantUrl: err.grantUrl });
+            }
             return json({ error: err instanceof Error ? err.message : String(err) });
           }
         },
-      },
-      { name: "feishu_doc" },
-    );
-    registered.push("feishu_doc");
-  }
+      };
+    },
+    { name: "feishu_doc" },
+  );
 
-  // Keep feishu_app_scopes as independent tool
-  if (toolsCfg.scopes) {
-    api.registerTool(
-      {
+  api.registerTool(
+    (ctx) => {
+      const cfg = ctx.config;
+      if (!cfg) {
+        return null;
+      }
+      const accountId = ctx.agentAccountId ?? resolveDefaultFeishuAccountId(cfg);
+      const account = resolveFeishuAccount({ cfg, accountId });
+      if (!account.enabled || !account.configured) {
+        return null;
+      }
+      const toolsCfg = resolveToolsConfig(account.config.tools);
+      if (!toolsCfg.scopes) {
+        return null;
+      }
+
+      const client = createFeishuClient(account);
+      return {
         name: "feishu_app_scopes",
         label: "Feishu App Scopes",
         description:
@@ -588,19 +621,14 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
         parameters: Type.Object({}),
         async execute() {
           try {
-            const result = await listAppScopes(getClient());
+            const result = await listAppScopes(client);
             return json(result);
           } catch (err) {
             return json({ error: err instanceof Error ? err.message : String(err) });
           }
         },
-      },
-      { name: "feishu_app_scopes" },
-    );
-    registered.push("feishu_app_scopes");
-  }
-
-  if (registered.length > 0) {
-    api.logger.info?.(`feishu_doc: Registered ${registered.join(", ")}`);
-  }
+      };
+    },
+    { name: "feishu_app_scopes" },
+  );
 }

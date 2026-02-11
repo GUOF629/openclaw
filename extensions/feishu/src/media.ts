@@ -5,6 +5,7 @@ import path from "path";
 import { Readable } from "stream";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { FeishuApiError } from "./errors.js";
 import { resolveReceiveIdType, normalizeFeishuTarget } from "./targets.js";
 
 export type DownloadImageResult = {
@@ -42,9 +43,10 @@ export async function downloadImageFeishu(params: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
   const responseAny = response as any;
   if (responseAny.code !== undefined && responseAny.code !== 0) {
-    throw new Error(
-      `Feishu image download failed: ${responseAny.msg || `code ${responseAny.code}`}`,
-    );
+    throw new FeishuApiError({
+      code: Number(responseAny.code),
+      message: `Feishu image download failed: ${responseAny.msg || `code ${responseAny.code}`}`,
+    });
   }
 
   // Handle various response formats from Feishu SDK
@@ -123,9 +125,10 @@ export async function downloadMessageResourceFeishu(params: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
   const responseAny = response as any;
   if (responseAny.code !== undefined && responseAny.code !== 0) {
-    throw new Error(
-      `Feishu message resource download failed: ${responseAny.msg || `code ${responseAny.code}`}`,
-    );
+    throw new FeishuApiError({
+      code: Number(responseAny.code),
+      message: `Feishu message resource download failed: ${responseAny.msg || `code ${responseAny.code}`}`,
+    });
   }
 
   // Handle various response formats from Feishu SDK
