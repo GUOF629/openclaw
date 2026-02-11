@@ -6,6 +6,20 @@ export const FeishuDocSchema = Type.Union([
     doc_token: Type.String({ description: "Document token (extract from URL /docx/XXX)" }),
   }),
   Type.Object({
+    action: Type.Literal("export"),
+    doc_token: Type.String({
+      description: "Document token (extract from URL /docx/XXX or from file/drive)",
+    }),
+    target_dir: Type.Optional(
+      Type.String({ description: "Target directory for saving (default: workspace memory dir)" }),
+    ),
+    extract_to_memory: Type.Optional(
+      Type.Boolean({
+        description: "Also trigger memory extraction for deep memory (default: true)",
+      }),
+    ),
+  }),
+  Type.Object({
     action: Type.Literal("write"),
     doc_token: Type.String({ description: "Document token" }),
     content: Type.String({

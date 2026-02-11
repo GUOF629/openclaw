@@ -382,6 +382,87 @@ async function deleteBlock(client: Lark.Client, docToken: string, blockId: strin
   return { success: true, deleted_block_id: blockId };
 }
 
+/**
+ * Export Feishu document as Markdown and optionally save to file
+ * Uses drive.file.export API to download document content
+ */
+async function exportDoc(
+  client: Lark.Client,
+  docToken: string,
+  targetDir?: string,
+  extractToMemory: boolean = true,
+) {
+  // Get document info first
+  const infoRes = await client.docx.document.get({
+    path: { document_id: docToken },
+  });
+  if (infoRes.code !== 0) {
+    throw new Error(infoRes.msg);
+  }
+
+  const docTitle = infoRes.data?.document?.title || `feishu_doc_${docToken}`;
+  const fileName = `${docTitle.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-_]/g, "_")}.md`;
+
+  // Export document using drive API
+  const exportRes = await client.drive.file.export({
+    path: { file_token: docToken },
+    params: {
+      type: "markdown", // Export as Markdown format
+    },
+  });
+
+  if (exportRes.code !== 0) {
+    throw new Error(exportRes.msg);
+  }
+
+  // The export API returns a download URL
+  const downloadUrl = exportRes.data?.file?.download_url;
+  if (!downloadUrl) {
+    throw new Error("Export succeeded but no download URL returned");
+  }
+
+  // Download the content
+  const response = await fetch(downloadUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to download exported file: ${response.status} ${response.statusText}`);
+  }
+
+  const content = await response.text();
+
+  // Build result
+  const result = {
+    doc_token: docToken,
+    title: docTitle,
+    file_name: fileName,
+    content_length: content.length,
+    content_preview: content.substring(0, 500) + (content.length > 500 ? "..." : ""),
+    extracted_to_memory: extractToMemory,
+  };
+
+  // If target directory specified, save to file
+  if (targetDir) {
+    try {
+      const fs = await import("fs");
+      const path = await import("path");
+      const fsPromises = fs.promises;
+
+      // Ensure target directory exists
+      await fsPromises.mkdir(targetDir, { recursive: true });
+
+      const filePath = path.join(targetDir, fileName);
+      await fsPromises.writeFile(filePath, content, "utf-8");
+
+      result["saved_to"] = filePath;
+      result["file_size"] = content.length;
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      result["file_save_error"] = error;
+    }
+  }
+
+  return result;
+}
+
 async function listBlocks(client: Lark.Client, docToken: string) {
   const res = await client.docx.documentBlock.list({
     path: { document_id: docToken },
@@ -455,7 +536,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
         name: "feishu_doc",
         label: "Feishu Doc",
         description:
-          "Feishu document operations. Actions: read, write, append, create, list_blocks, get_block, update_block, delete_block",
+          "Feishu document operations. Actions: read, write, append, create, export, list_blocks, get_block, update_block, delete_block",
         parameters: FeishuDocSchema,
         async execute(_toolCallId, params) {
           const p = params as FeishuDocParams;
@@ -464,6 +545,10 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
             switch (p.action) {
               case "read":
                 return json(await readDoc(client, p.doc_token));
+              case "export":
+                return json(
+                  await exportDoc(client, p.doc_token, p.target_dir, p.extract_to_memory),
+                );
               case "write":
                 return json(await writeDoc(client, p.doc_token, p.content));
               case "append":
