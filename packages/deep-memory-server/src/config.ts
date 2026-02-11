@@ -1,6 +1,22 @@
 import { z } from "zod";
 import type { MigrationMode } from "./schema.js";
 
+const Bool = z.preprocess((v) => {
+  if (typeof v === "boolean") {
+    return v;
+  }
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    if (s === "" || s === "0" || s === "false" || s === "no" || s === "off") {
+      return false;
+    }
+    if (s === "1" || s === "true" || s === "yes" || s === "on") {
+      return true;
+    }
+  }
+  return v;
+}, z.boolean());
+
 const EnvSchema = z.object({
   PORT: z.coerce.number().int().positive().default(8088),
   HOST: z.string().default("0.0.0.0"),
@@ -9,7 +25,7 @@ const EnvSchema = z.object({
   API_KEYS_JSON: z.string().optional(),
   BUILD_SHA: z.string().optional(),
   BUILD_TIME: z.string().optional(),
-  REQUIRE_API_KEY: z.coerce.boolean().default(false),
+  REQUIRE_API_KEY: Bool.default(false),
   MAX_BODY_BYTES: z.coerce
     .number()
     .int()
@@ -21,8 +37,8 @@ const EnvSchema = z.object({
     .positive()
     .default(2 * 1024 * 1024),
   AUDIT_LOG_PATH: z.string().optional(),
-  ALLOW_UNAUTHENTICATED_METRICS: z.coerce.boolean().default(false),
-  RATE_LIMIT_ENABLED: z.coerce.boolean().default(false),
+  ALLOW_UNAUTHENTICATED_METRICS: Bool.default(false),
+  RATE_LIMIT_ENABLED: Bool.default(false),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
   RATE_LIMIT_RETRIEVE_PER_WINDOW: z.coerce.number().int().nonnegative().default(0),
   RATE_LIMIT_UPDATE_PER_WINDOW: z.coerce.number().int().nonnegative().default(0),
@@ -42,7 +58,7 @@ const EnvSchema = z.object({
   MIGRATIONS_MODE: z
     .enum(["off", "validate", "apply"])
     .default("apply") satisfies z.ZodType<MigrationMode>,
-  MIGRATIONS_STRICT: z.coerce.boolean().default(false),
+  MIGRATIONS_STRICT: Bool.default(false),
 
   // Qdrant
   QDRANT_URL: z.string().default("http://qdrant:6333"),
@@ -75,7 +91,7 @@ const EnvSchema = z.object({
     .int()
     .positive()
     .default(5 * 60_000),
-  QUEUE_KEEP_DONE: z.coerce.boolean().default(true),
+  QUEUE_KEEP_DONE: Bool.default(true),
   QUEUE_RETENTION_DAYS: z.coerce.number().int().positive().default(7),
   QUEUE_MAX_TASK_BYTES: z.coerce
     .number()
@@ -89,7 +105,7 @@ const EnvSchema = z.object({
   IMPORTANCE_BOOST: z.coerce.number().min(0).max(2).default(0.3),
   FREQUENCY_BOOST: z.coerce.number().min(0).max(2).default(0.2),
   RELATED_TOPK: z.coerce.number().int().nonnegative().default(5),
-  SENSITIVE_FILTER_ENABLED: z.coerce.boolean().default(true),
+  SENSITIVE_FILTER_ENABLED: Bool.default(true),
   SENSITIVE_RULESET_VERSION: z.string().default("builtin-v1"),
   SENSITIVE_DENY_REGEX_JSON: z.string().optional(),
   SENSITIVE_ALLOW_REGEX_JSON: z.string().optional(),

@@ -74,7 +74,8 @@ export class DeepMemoryUpdater {
         sessionId: params.sessionId,
       });
       if (meta.transcriptHash === transcriptHash) {
-        return { status: "skipped", memories_added: 0, memories_filtered: 0 };
+        // Idempotency: transcript already ingested. Treat as successfully processed.
+        return { status: "processed", memories_added: 0, memories_filtered: 0 };
       }
     } catch {
       // If Neo4j is unavailable, we proceed best-effort (may duplicate).

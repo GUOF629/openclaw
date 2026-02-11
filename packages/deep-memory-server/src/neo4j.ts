@@ -866,10 +866,10 @@ export class Neo4jStore {
                 if (!name) {
                   return null;
                 }
-                const type = typeof rec.type === "string" ? rec.type.trim() : undefined;
-                return { name, type };
+                const type = typeof rec.type === "string" ? rec.type.trim() : "";
+                return type ? { name, type } : { name };
               })
-              .filter(Boolean)
+              .filter((e): e is { name: string; type?: string } => e !== null)
           : [];
 
         const kindRaw = String(r.get("kind") ?? "");

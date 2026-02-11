@@ -2,7 +2,7 @@ import JSZip from "jszip";
 import mammoth from "mammoth";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import pdfParse from "pdf-parse";
+import { PDFParse } from "pdf-parse";
 import pino from "pino";
 import { z } from "zod";
 
@@ -845,27 +845,59 @@ async function extractPdfLike(params: {
   chunkOverlapChars: number;
 }): Promise<ExtractionResultV1> {
   const warnings: string[] = [];
-  const pages: string[] = [];
   const buf = Buffer.from(params.bytes);
   const maxChars = Math.max(500, params.chunkMaxChars);
   const overlap = Math.max(0, Math.min(params.chunkOverlapChars, Math.max(0, maxChars - 100)));
   try {
-    await pdfParse(buf, {
-      pagerender: async (pageData: unknown) => {
-        const page = pageData as {
-          getTextContent: () => Promise<{ items: Array<{ str?: string }> }>;
-        };
-        const tc = await page.getTextContent();
-        const text = (tc.items ?? [])
-          .map((it) => (typeof it?.str === "string" ? it.str : ""))
-          .filter(Boolean)
-          .join(" ")
-          .replace(/\s+/g, " ")
-          .trim();
-        pages.push(text);
-        return text;
+    const parser = new PDFParse({ data: buf });
+    const textRes = await parser.getText();
+    await parser.destroy();
+
+    const pages = (textRes.pages ?? []).map((p) => p.text ?? "");
+    if (pages.every((p) => !p.trim())) {
+      warnings.push("empty_pdf_text");
+    }
+
+    const segments: ExtractionSegmentV1[] = [];
+    const totalPages = pages.length || 1;
+    for (let pi = 0; pi < pages.length; pi += 1) {
+      const pageText = pages[pi] ?? "";
+      if (!pageText.trim()) {
+        continue;
+      }
+      const chunks = splitIntoChunks({ text: pageText, maxChars, overlapChars: overlap });
+      for (let ci = 0; ci < chunks.length; ci += 1) {
+        const c = chunks[ci];
+        if (!c) {
+          continue;
+        }
+        segments.push({
+          text: c.text,
+          locator: {
+            kind: "page",
+            index: pi + 1,
+            total: totalPages,
+            label: `page ${pi + 1}`,
+            startChar: c.startChar,
+            endChar: c.endChar,
+          },
+        });
+      }
+    }
+
+    return {
+      schema_version: 1,
+      docTypeGuess: "pdf",
+      languageGuess: undefined,
+      segments,
+      warnings,
+      stats: {
+        bytes: params.bytes.length,
+        chars: pages.reduce((sum, p) => sum + p.length, 0),
+        segments: segments.length,
+        truncated: params.truncated,
       },
-    });
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     warnings.push(`pdf_parse_failed:${message}`);
@@ -883,51 +915,6 @@ async function extractPdfLike(params: {
       },
     };
   }
-
-  if (pages.every((p) => !p.trim())) {
-    warnings.push("empty_pdf_text");
-  }
-
-  const segments: ExtractionSegmentV1[] = [];
-  const totalPages = pages.length || 1;
-  for (let pi = 0; pi < pages.length; pi += 1) {
-    const pageText = pages[pi] ?? "";
-    if (!pageText.trim()) {
-      continue;
-    }
-    const chunks = splitIntoChunks({ text: pageText, maxChars, overlapChars: overlap });
-    for (let ci = 0; ci < chunks.length; ci += 1) {
-      const c = chunks[ci];
-      if (!c) {
-        continue;
-      }
-      segments.push({
-        text: c.text,
-        locator: {
-          kind: "page",
-          index: pi + 1,
-          total: totalPages,
-          label: `page ${pi + 1}`,
-          startChar: c.startChar,
-          endChar: c.endChar,
-        },
-      });
-    }
-  }
-
-  return {
-    schema_version: 1,
-    docTypeGuess: "pdf",
-    languageGuess: undefined,
-    segments,
-    warnings,
-    stats: {
-      bytes: params.bytes.length,
-      chars: pages.reduce((sum, p) => sum + p.length, 0),
-      segments: segments.length,
-      truncated: params.truncated,
-    },
-  };
 }
 
 async function extractDocxLike(params: {
