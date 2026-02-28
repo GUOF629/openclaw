@@ -27,7 +27,6 @@ mise.toml
 apps/android/.gradle/
 apps/android/app/build/
 apps/android/.cxx/
-
 # Bun build artifacts
 *.bun-build
 apps/macos/.build/
@@ -49,6 +48,8 @@ apps/ios/.swiftpm/
 apps/ios/.derivedData/
 apps/ios/.local-signing.xcconfig
 vendor/
+!src/auto-reply/reply/export-html/vendor/
+!src/auto-reply/reply/export-html/vendor/**
 apps/ios/Clawdbot.xcodeproj/
 apps/ios/Clawdbot.xcodeproj/**
 apps/macos/.build/**
@@ -79,6 +80,7 @@ apps/ios/*.mobileprovision
 
 # Local untracked files
 .local/
+.cursor/
 docs/.local/
 IDENTITY.md
 USER.md
@@ -88,6 +90,8 @@ USER.md
 # local tooling
 .serena/
 
+# Rust build artifacts (RustFS)
+packages/rustfs/target/
 # Agent credentials and memory (NEVER COMMIT)
 /memory/
 .agent/*.json
@@ -95,8 +99,6 @@ USER.md
 /local/
 package-lock.json
 .claude/settings.local.json
-.agents/
-.agents
 .agent/
 skills-lock.json
 

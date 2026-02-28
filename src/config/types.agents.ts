@@ -15,6 +15,10 @@ export type AgentConfig = {
   /** Optional allowlist of skills for this agent (omit = all skills; empty = none). */
   skills?: string[];
   memorySearch?: MemorySearchConfig;
+  /** Deep memory (external long-term memory service) configuration. */
+  deepMemory?: AgentDefaultsConfig["deepMemory"];
+  /** RustFS (session file archive) configuration. */
+  rustfs?: AgentDefaultsConfig["rustfs"];
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
   /** Optional per-agent heartbeat overrides. */

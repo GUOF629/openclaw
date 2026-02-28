@@ -1,0 +1,59 @@
+groups:
+  - name: deep-memory-server
+    rules:
+      - alert: DeepMemoryServerHighErrorRate
+        expr: |
+          (
+            sum(rate(deep_memory_http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(deep_memory_http_requests_total[5m])), 1e-9)
+          ) > 0.02
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "deep-memory-server 5xx error rate is high"
+          description: "5xx rate > 2% for 10m. Check /readyz, DB availability, and queue backlog."
+
+      - alert: DeepMemoryServerHighP95Latency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(deep_memory_http_request_duration_seconds_bucket[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "deep-memory-server p95 latency is high"
+          description: "p95 request latency > 1s for 10m. Check DB latency, CPU, and queue saturation."
+
+      - alert: DeepMemoryQueueBacklogHigh
+        expr: deep_memory_queue_pending > 1000
+        for: 15m
+        labels:
+          severity: page
+        annotations:
+          summary: "deep-memory queue backlog is high"
+          description: "Pending update tasks > 1000 for 15m. Consider scaling UPDATE_CONCURRENCY, checking DB health, or throttling updates."
+
+      - alert: DeepMemoryQueueStuckNoWorkers
+        expr: deep_memory_queue_pending > 0 and deep_memory_queue_active == 0
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "deep-memory queue appears stuck"
+          description: "There are pending tasks but no active workers for 10m. Check logs and whether the process is running."
+
+# Optional: if you use a blackbox exporter to probe /readyz, add an alert like:
+#
+# - alert: DeepMemoryReadyzFailing
+#   expr: probe_success{job="deep-memory-readyz"} == 0
+#   for: 5m
+#   labels:
+#     severity: page
+#   annotations:
+#     summary: "deep-memory /readyz probe failing"
+#     description: "Blackbox probe reports failures for /readyz."
+

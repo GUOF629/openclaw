@@ -6,7 +6,7 @@ import type {
   HumanDelayConfig,
   TypingMode,
 } from "./types.base.js";
-import type { MemorySearchConfig } from "./types.tools.js";
+import type { DeepMemoryConfig, MemorySearchConfig, RustFsConfig } from "./types.tools.js";
 
 export type AgentModelEntryConfig = {
   alias?: string;
@@ -170,6 +170,10 @@ export type AgentDefaultsConfig = {
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
+  /** Deep memory (external long-term memory service) configuration. */
+  deepMemory?: DeepMemoryConfig;
+  /** RustFS (session file archive) configuration. */
+  rustfs?: RustFsConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   /** Default verbose level when no /verbose directive is present. */

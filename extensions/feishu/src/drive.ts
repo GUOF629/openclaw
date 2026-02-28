@@ -2,6 +2,7 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
+import { extractPermissionError } from "./errors.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
 
 // ============ Helpers ============
@@ -194,7 +195,7 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
         name: "feishu_drive",
         label: "Feishu Drive",
         description:
-          "Feishu cloud storage operations. Actions: list, info, create_folder, move, delete",
+          "Feishu cloud storage operations. Actions: list, info, create_folder, move, delete. On permission errors, returns a grant URL when available.",
         parameters: FeishuDriveSchema,
         async execute(_toolCallId, params) {
           const p = params as FeishuDriveExecuteParams;
@@ -220,6 +221,10 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
                 return json({ error: `Unknown action: ${(p as any).action}` });
             }
           } catch (err) {
+            const permErr = extractPermissionError(err);
+            if (permErr) {
+              return json({ error: permErr.message, permission: permErr });
+            }
             return json({ error: err instanceof Error ? err.message : String(err) });
           }
         },
@@ -227,6 +232,4 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
     },
     { name: "feishu_drive" },
   );
-
-  api.logger.info?.(`feishu_drive: Registered feishu_drive tool`);
 }

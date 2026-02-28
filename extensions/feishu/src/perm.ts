@@ -1,6 +1,7 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { listEnabledFeishuAccounts } from "./accounts.js";
+import { extractPermissionError } from "./errors.js";
 import { FeishuPermSchema, type FeishuPermParams } from "./perm-schema.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
 
@@ -168,6 +169,10 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
                 return json({ error: `Unknown action: ${(p as any).action}` });
             }
           } catch (err) {
+            const permErr = extractPermissionError(err);
+            if (permErr) {
+              return json({ error: permErr.message, permission: permErr });
+            }
             return json({ error: err instanceof Error ? err.message : String(err) });
           }
         },
@@ -175,6 +180,4 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
     },
     { name: "feishu_perm" },
   );
-
-  api.logger.info?.(`feishu_perm: Registered feishu_perm tool`);
 }

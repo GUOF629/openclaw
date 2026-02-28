@@ -1,11 +1,12 @@
 import { promises as fs } from "node:fs";
-import { basename } from "node:path";
+import path from "node:path";
 import { Readable } from "stream";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
+import { FeishuApiError, extractPermissionError } from "./errors.js";
 import { getFeishuRuntime } from "./runtime.js";
 import {
   createFeishuToolClient,
@@ -219,7 +220,7 @@ async function resolveUploadInput(
   }
   return {
     buffer,
-    fileName: explicitFileName || basename(filePath!),
+    fileName: explicitFileName || path.basename(filePath!),
   };
 }
 
@@ -405,7 +406,22 @@ async function readDoc(client: Lark.Client, docToken: string) {
   ]);
 
   if (contentRes.code !== 0) {
-    throw new Error(contentRes.msg);
+    throw new FeishuApiError({
+      code: contentRes.code ?? -1,
+      message: contentRes.msg ?? "Feishu doc rawContent failed",
+    });
+  }
+  if (infoRes.code !== 0) {
+    throw new FeishuApiError({
+      code: infoRes.code ?? -1,
+      message: infoRes.msg ?? "Feishu doc get failed",
+    });
+  }
+  if (blocksRes.code !== 0) {
+    throw new FeishuApiError({
+      code: blocksRes.code ?? -1,
+      message: blocksRes.msg ?? "Feishu doc blocks list failed",
+    });
   }
 
   const blocks = blocksRes.data?.items ?? [];
@@ -772,6 +788,81 @@ async function deleteBlock(client: Lark.Client, docToken: string, blockId: strin
   return { success: true, deleted_block_id: blockId };
 }
 
+/**
+ * Export Feishu document content and optionally save to file.
+ *
+ * We use docx rawContent here to avoid SDK drift around drive export helpers.
+ */
+async function exportDoc(
+  client: Lark.Client,
+  docToken: string,
+  targetDir?: string,
+  extractToMemory: boolean = true,
+) {
+  // Get document info first
+  const infoRes = await client.docx.document.get({
+    path: { document_id: docToken },
+  });
+  if (infoRes.code !== 0) {
+    throw new FeishuApiError({
+      code: infoRes.code ?? -1,
+      message: infoRes.msg ?? "Feishu doc get failed",
+    });
+  }
+
+  const docTitle = infoRes.data?.document?.title || `feishu_doc_${docToken}`;
+  const fileName = `${docTitle.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-_]/g, "_")}.md`;
+
+  const contentRes = await client.docx.document.rawContent({ path: { document_id: docToken } });
+  if (contentRes.code !== 0) {
+    throw new FeishuApiError({
+      code: contentRes.code ?? -1,
+      message: contentRes.msg ?? "Feishu doc rawContent failed",
+    });
+  }
+
+  const content = contentRes.data?.content ?? "";
+
+  // Build result
+  const result: {
+    doc_token: string;
+    title: string;
+    file_name: string;
+    content_length: number;
+    content_preview: string;
+    extracted_to_memory: boolean;
+    saved_to?: string;
+    file_size?: number;
+    file_save_error?: string;
+  } = {
+    doc_token: docToken,
+    title: docTitle,
+    file_name: fileName,
+    content_length: content.length,
+    content_preview: content.substring(0, 500) + (content.length > 500 ? "..." : ""),
+    extracted_to_memory: extractToMemory,
+  };
+
+  // If target directory specified, save to file
+  if (targetDir) {
+    try {
+      // Ensure target directory exists
+      await fs.mkdir(targetDir, { recursive: true });
+
+      const filePath = path.join(targetDir, fileName);
+      await fs.writeFile(filePath, content, "utf-8");
+
+      result.saved_to = filePath;
+      result.file_size = content.length;
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      result.file_save_error = error;
+    }
+  }
+
+  return result;
+}
+
 async function listBlocks(client: Lark.Client, docToken: string) {
   const res = await client.docx.documentBlock.list({
     path: { document_id: docToken },
@@ -823,7 +914,6 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
     return;
   }
 
-  // Check if any account is configured
   const accounts = listEnabledFeishuAccounts(api.config);
   if (accounts.length === 0) {
     api.logger.debug?.("feishu_doc: No Feishu accounts configured, skipping doc tools");
@@ -853,11 +943,14 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
     api.registerTool(
       (ctx) => {
         const defaultAccountId = ctx.agentAccountId;
+        const defaultTargetDir = ctx.workspaceDir
+          ? path.join(ctx.workspaceDir, "downloads", "feishu")
+          : undefined;
         return {
           name: "feishu_doc",
           label: "Feishu Doc",
           description:
-            "Feishu document operations. Actions: read, write, append, create, list_blocks, get_block, update_block, delete_block, create_table, write_table_cells, create_table_with_values, upload_image, upload_file",
+            "Feishu document operations. Actions: read, write, append, create, export (saves to workspace for RustFS ingest), list_blocks, get_block, update_block, delete_block, create_table, write_table_cells, create_table_with_values, upload_image, upload_file. On permission errors, returns a grant URL when available.",
           parameters: FeishuDocSchema,
           async execute(_toolCallId, params) {
             const p = params as FeishuDocExecuteParams;
@@ -866,6 +959,15 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
               switch (p.action) {
                 case "read":
                   return json(await readDoc(client, p.doc_token));
+                case "export":
+                  return json(
+                    await exportDoc(
+                      client,
+                      p.doc_token,
+                      p.target_dir ?? defaultTargetDir,
+                      p.extract_to_memory ?? true,
+                    ),
+                  );
                 case "write":
                   return json(
                     await writeDoc(
@@ -959,6 +1061,10 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                   return json({ error: `Unknown action: ${(p as any).action}` });
               }
             } catch (err) {
+              const permErr = extractPermissionError(err);
+              if (permErr) {
+                return json({ error: permErr.message, permission: permErr });
+              }
               return json({ error: err instanceof Error ? err.message : String(err) });
             }
           },

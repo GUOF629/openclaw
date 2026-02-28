@@ -23,6 +23,8 @@ export type FollowupRun = {
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
+  /** Clean user input used for deep-memory retrieval/injection (optional). */
+  deepMemoryUserInput?: string;
   enqueuedAt: number;
   /**
    * Originating channel for reply routing.

@@ -1,0 +1,17 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deep-memory-server-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: deep-memory-server
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow in-namespace callers by default. Tighten this to specific pods/namespaces
+    # in production (e.g. OpenClaw gateway pods + Prometheus).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openclaw

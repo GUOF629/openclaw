@@ -1,6 +1,7 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { listEnabledFeishuAccounts } from "./accounts.js";
+import { extractPermissionError } from "./errors.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
 import { FeishuWikiSchema, type FeishuWikiParams } from "./wiki-schema.js";
 
@@ -182,7 +183,7 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
         name: "feishu_wiki",
         label: "Feishu Wiki",
         description:
-          "Feishu knowledge base operations. Actions: spaces, nodes, get, create, move, rename",
+          "Feishu knowledge base operations. Actions: spaces, nodes, get, create, move, rename. On permission errors, returns a grant URL when available.",
         parameters: FeishuWikiSchema,
         async execute(_toolCallId, params) {
           const p = params as FeishuWikiExecuteParams;
@@ -225,6 +226,10 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
                 return json({ error: `Unknown action: ${(p as any).action}` });
             }
           } catch (err) {
+            const permErr = extractPermissionError(err);
+            if (permErr) {
+              return json({ error: permErr.message, permission: permErr });
+            }
             return json({ error: err instanceof Error ? err.message : String(err) });
           }
         },
@@ -232,6 +237,4 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
     },
     { name: "feishu_wiki" },
   );
-
-  api.logger.info?.(`feishu_wiki: Registered feishu_wiki tool`);
 }

@@ -18,6 +18,7 @@
     "node_modules/",
     "patches/",
     "pnpm-lock.yaml/",
+    "packages/rustfs/target/",
     "src/gateway/server-methods/CLAUDE.md",
     "src/auto-reply/reply/export-html/",
     "Swabble/",

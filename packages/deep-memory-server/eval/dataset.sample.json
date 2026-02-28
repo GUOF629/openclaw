@@ -1,0 +1,255 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "filters expired ephemeral memory and resolves conflict by memory_key",
+      "namespace": "teamA",
+      "now": "2026-02-01T00:00:00.000Z",
+      "query": {
+        "userInput": "What's my timezone preference?",
+        "sessionId": "sess-1",
+        "entities": ["timezone"],
+        "topics": ["preferences"],
+        "maxMemories": 3
+      },
+      "qdrantHits": [
+        {
+          "id": "teamA::mem_tz_old",
+          "score": 0.91,
+          "payload": {
+            "content": "User prefers timezone: UTC.",
+            "importance": 0.8,
+            "frequency": 2,
+            "created_at": "2025-12-01T00:00:00.000Z",
+            "updated_at": "2026-01-15T00:00:00.000Z",
+            "kind": "preference",
+            "memory_key": "preference:timezone",
+            "subject": "timezone"
+          }
+        },
+        {
+          "id": "teamA::mem_tz_new",
+          "score": 0.88,
+          "payload": {
+            "content": "User prefers timezone: Asia/Shanghai.",
+            "importance": 0.9,
+            "frequency": 1,
+            "created_at": "2026-01-20T00:00:00.000Z",
+            "updated_at": "2026-01-25T00:00:00.000Z",
+            "kind": "preference",
+            "memory_key": "preference:timezone",
+            "subject": "timezone"
+          }
+        },
+        {
+          "id": "teamA::mem_ephemeral",
+          "score": 0.95,
+          "payload": {
+            "content": "Temporary code: 123456 (expires soon).",
+            "importance": 0.7,
+            "frequency": 1,
+            "created_at": "2026-01-31T00:00:00.000Z",
+            "kind": "ephemeral",
+            "expires_at": "2026-01-31T12:00:00.000Z"
+          }
+        }
+      ],
+      "neo4jHits": [
+        {
+          "id": "teamA::mem_tz_new",
+          "content": "User prefers timezone: Asia/Shanghai.",
+          "importance": 0.9,
+          "frequency": 1,
+          "lastSeenAt": "2026-01-25T00:00:00.000Z",
+          "relationScore": 0.9,
+          "kind": "preference",
+          "memoryKey": "preference:timezone",
+          "subject": "timezone"
+        }
+      ],
+      "expect": {
+        "includeIds": ["teamA::mem_tz_new"],
+        "excludeIds": ["teamA::mem_ephemeral"],
+        "top1Id": "teamA::mem_tz_new",
+        "uniqueByMemoryKey": true
+      }
+    },
+    {
+      "name": "semantic only: returns top semantic hit",
+      "namespace": "teamA",
+      "now": "2026-02-01T00:00:00.000Z",
+      "query": {
+        "userInput": "What project am I working on?",
+        "sessionId": "sess-2",
+        "entities": ["project"],
+        "topics": ["work"],
+        "maxMemories": 2
+      },
+      "qdrantHits": [
+        {
+          "id": "teamA::mem_proj",
+          "score": 0.9,
+          "payload": {
+            "content": "User is working on Project Atlas.",
+            "importance": 0.7,
+            "frequency": 1,
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "updated_at": "2026-01-20T00:00:00.000Z",
+            "kind": "fact",
+            "memory_key": "fact:project"
+          }
+        }
+      ],
+      "neo4jHits": [],
+      "expect": {
+        "includeIds": ["teamA::mem_proj"],
+        "top1Id": "teamA::mem_proj"
+      }
+    },
+    {
+      "name": "relation only: returns top relation hit",
+      "namespace": "teamA",
+      "now": "2026-02-01T00:00:00.000Z",
+      "query": {
+        "userInput": "Remind me about the deployment decision",
+        "sessionId": "sess-3",
+        "entities": ["deployment"],
+        "topics": ["design"],
+        "maxMemories": 2
+      },
+      "qdrantHits": [],
+      "neo4jHits": [
+        {
+          "id": "teamA::mem_deploy_decision",
+          "content": "Deployment decided: use Docker Compose in production first, then Kubernetes.",
+          "importance": 0.8,
+          "frequency": 1,
+          "lastSeenAt": "2026-01-30T00:00:00.000Z",
+          "relationScore": 0.9,
+          "kind": "fact",
+          "memoryKey": "fact:deployment"
+        }
+      ],
+      "expect": {
+        "includeIds": ["teamA::mem_deploy_decision"],
+        "top1Id": "teamA::mem_deploy_decision"
+      }
+    },
+    {
+      "name": "namespace isolation: ignores hits from other namespaces",
+      "namespace": "teamA",
+      "now": "2026-02-01T00:00:00.000Z",
+      "query": {
+        "userInput": "What is my favorite language?",
+        "sessionId": "sess-4",
+        "entities": ["language"],
+        "topics": ["preferences"],
+        "maxMemories": 2
+      },
+      "qdrantHits": [
+        {
+          "id": "teamB::mem_lang",
+          "score": 0.99,
+          "payload": {
+            "content": "User prefers language: Rust.",
+            "importance": 0.9,
+            "frequency": 1,
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "memory_key": "preference:language"
+          }
+        },
+        {
+          "id": "teamA::mem_lang",
+          "score": 0.7,
+          "payload": {
+            "content": "User prefers language: TypeScript.",
+            "importance": 0.8,
+            "frequency": 1,
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "memory_key": "preference:language"
+          }
+        }
+      ],
+      "neo4jHits": [],
+      "expect": {
+        "includeIds": ["teamA::mem_lang"],
+        "excludeIds": ["teamB::mem_lang"],
+        "top1Id": "teamA::mem_lang"
+      }
+    },
+    {
+      "name": "decay prefers recently seen memory",
+      "namespace": "teamA",
+      "now": "2026-02-01T00:00:00.000Z",
+      "query": {
+        "userInput": "What is the database choice?",
+        "sessionId": "sess-5",
+        "entities": ["database"],
+        "topics": ["design"],
+        "maxMemories": 2
+      },
+      "qdrantHits": [
+        {
+          "id": "teamA::mem_db_old",
+          "score": 0.9,
+          "payload": {
+            "content": "DB choice: Neo4j.",
+            "importance": 0.7,
+            "frequency": 1,
+            "created_at": "2025-01-01T00:00:00.000Z",
+            "updated_at": "2025-01-01T00:00:00.000Z",
+            "memory_key": "fact:db"
+          }
+        },
+        {
+          "id": "teamA::mem_db_new",
+          "score": 0.9,
+          "payload": {
+            "content": "DB choice: Neo4j + Qdrant.",
+            "importance": 0.7,
+            "frequency": 1,
+            "created_at": "2026-01-25T00:00:00.000Z",
+            "updated_at": "2026-01-25T00:00:00.000Z",
+            "memory_key": "fact:db"
+          }
+        }
+      ],
+      "neo4jHits": [],
+      "expect": {
+        "includeIds": ["teamA::mem_db_new"],
+        "top1Id": "teamA::mem_db_new",
+        "uniqueByMemoryKey": true
+      }
+    },
+    {
+      "name": "invalid expires_at does not cause accidental expiration",
+      "namespace": "teamA",
+      "now": "2026-02-01T00:00:00.000Z",
+      "query": {
+        "userInput": "What is my note?",
+        "sessionId": "sess-6",
+        "entities": ["note"],
+        "topics": ["misc"],
+        "maxMemories": 1
+      },
+      "qdrantHits": [
+        {
+          "id": "teamA::mem_bad_exp",
+          "score": 0.8,
+          "payload": {
+            "content": "A note that should not be dropped.",
+            "importance": 0.6,
+            "frequency": 1,
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "expires_at": "not-a-date"
+          }
+        }
+      ],
+      "neo4jHits": [],
+      "expect": {
+        "includeIds": ["teamA::mem_bad_exp"],
+        "top1Id": "teamA::mem_bad_exp"
+      }
+    }
+  ]
+}

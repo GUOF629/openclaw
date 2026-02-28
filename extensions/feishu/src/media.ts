@@ -4,6 +4,7 @@ import { Readable } from "stream";
 import { withTempDownloadPath, type ClawdbotConfig } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { FeishuApiError } from "./errors.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
@@ -29,7 +30,10 @@ async function readFeishuResponseBuffer(params: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
   const responseAny = response as any;
   if (responseAny.code !== undefined && responseAny.code !== 0) {
-    throw new Error(`${params.errorPrefix}: ${responseAny.msg || `code ${responseAny.code}`}`);
+    throw new FeishuApiError({
+      code: Number(responseAny.code),
+      message: `${params.errorPrefix}: ${responseAny.msg || `code ${responseAny.code}`}`,
+    });
   }
 
   if (Buffer.isBuffer(response)) {
@@ -102,7 +106,6 @@ export async function downloadImageFeishu(params: {
   const response = await client.im.image.get({
     path: { image_key: normalizedImageKey },
   });
-
   const buffer = await readFeishuResponseBuffer({
     response,
     tmpDirPrefix: "openclaw-feishu-img-",
@@ -138,7 +141,6 @@ export async function downloadMessageResourceFeishu(params: {
     path: { message_id: messageId, file_key: normalizedFileKey },
     params: { type },
   });
-
   const buffer = await readFeishuResponseBuffer({
     response,
     tmpDirPrefix: "openclaw-feishu-resource-",
