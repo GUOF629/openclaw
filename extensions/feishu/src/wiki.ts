@@ -1,9 +1,8 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { resolveDefaultFeishuAccountId, resolveFeishuAccount } from "./accounts.js";
-import { createFeishuClient } from "./client.js";
+import { listEnabledFeishuAccounts } from "./accounts.js";
 import { extractPermissionError } from "./errors.js";
-import { resolveToolsConfig } from "./tools-config.js";
+import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
 import { FeishuWikiSchema, type FeishuWikiParams } from "./wiki-schema.js";
 
 // ============ Helpers ============
@@ -158,33 +157,42 @@ async function renameNode(client: Lark.Client, spaceId: string, nodeToken: strin
 // ============ Tool Registration ============
 
 export function registerFeishuWikiTools(api: OpenClawPluginApi) {
+  if (!api.config) {
+    api.logger.debug?.("feishu_wiki: No config available, skipping wiki tools");
+    return;
+  }
+
+  const accounts = listEnabledFeishuAccounts(api.config);
+  if (accounts.length === 0) {
+    api.logger.debug?.("feishu_wiki: No Feishu accounts configured, skipping wiki tools");
+    return;
+  }
+
+  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
+  if (!toolsCfg.wiki) {
+    api.logger.debug?.("feishu_wiki: wiki tool disabled in config");
+    return;
+  }
+
+  type FeishuWikiExecuteParams = FeishuWikiParams & { accountId?: string };
+
   api.registerTool(
     (ctx) => {
-      const cfg = ctx.config;
-      if (!cfg) {
-        return null;
-      }
-      const accountId = ctx.agentAccountId ?? resolveDefaultFeishuAccountId(cfg);
-      const account = resolveFeishuAccount({ cfg, accountId });
-      if (!account.enabled || !account.configured) {
-        return null;
-      }
-
-      const toolsCfg = resolveToolsConfig(account.config.tools);
-      if (!toolsCfg.wiki) {
-        return null;
-      }
-
-      const client = createFeishuClient(account);
+      const defaultAccountId = ctx.agentAccountId;
       return {
         name: "feishu_wiki",
         label: "Feishu Wiki",
         description:
-          "Feishu knowledge base operations. Actions: spaces, nodes, get, create, move, rename. On permission errors, returns a hint/grant URL when available.",
+          "Feishu knowledge base operations. Actions: spaces, nodes, get, create, move, rename. On permission errors, returns a grant URL when available.",
         parameters: FeishuWikiSchema,
         async execute(_toolCallId, params) {
-          const p = params as FeishuWikiParams;
+          const p = params as FeishuWikiExecuteParams;
           try {
+            const client = createFeishuToolClient({
+              api,
+              executeParams: p,
+              defaultAccountId,
+            });
             switch (p.action) {
               case "spaces":
                 return json(await listSpaces(client));

@@ -2,9 +2,9 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import type { EvalDataset } from "./types.js";
 import { runEval } from "./harness.js";
 import { createRetrieverForEval } from "./stubs.js";
+import type { EvalDataset } from "./types.js";
 
 const pkgRoot = path.dirname(fileURLToPath(import.meta.url));
 const datasetPath = path.resolve(pkgRoot, "../../eval/dataset.sample.json");

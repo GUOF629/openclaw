@@ -1,28 +1,27 @@
 import crypto from "node:crypto";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { TemplateContext } from "../templating.js";
-import type { VerboseLevel } from "../thinking.js";
-import type { GetReplyOptions } from "../types.js";
-import type { FollowupRun } from "./queue.js";
-import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import {
-  resolveAgentIdFromSessionKey,
-  type SessionEntry,
-  updateSessionStoreEntry,
-} from "../../config/sessions.js";
-import { considerDeepMemoryUpdateNearCompaction } from "../../deep-memory/update-scheduler.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { type SessionEntry, updateSessionStoreEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
-import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
+import type { TemplateContext } from "../templating.js";
+import type { VerboseLevel } from "../thinking.js";
+import type { GetReplyOptions } from "../types.js";
+import {
+  buildEmbeddedRunBaseParams,
+  buildEmbeddedRunContexts,
+  resolveModelFallbackOptions,
+} from "./agent-runner-utils.js";
 import {
   resolveMemoryFlushContextWindowTokens,
+  resolveMemoryFlushPromptForRun,
   resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
 } from "./memory-flush.js";
+import type { FollowupRun } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 export async function runMemoryFlushIfNeeded(params: {
@@ -76,30 +75,6 @@ export async function runMemoryFlushIfNeeded(params: {
       softThresholdTokens: memoryFlushSettings.softThresholdTokens,
     });
 
-  // Trigger #3 (deep memory): nearing compaction => enqueue deep memory update (best-effort).
-  // This is intentionally decoupled from workspace writability (deep-memory reads transcripts on gateway).
-  try {
-    considerDeepMemoryUpdateNearCompaction({
-      cfg: params.cfg,
-      agentId: params.followupRun.run.agentId,
-      sessionKey: params.sessionKey,
-      sessionId: params.followupRun.run.sessionId,
-      sessionFile: params.followupRun.run.sessionFile,
-      storePath: params.storePath,
-      compactionCount:
-        params.sessionEntry?.compactionCount ??
-        (params.sessionKey ? params.sessionStore?.[params.sessionKey]?.compactionCount : 0) ??
-        0,
-      deepMemoryNearCompactionCount:
-        params.sessionEntry?.deepMemoryNearCompactionCount ??
-        (params.sessionKey
-          ? params.sessionStore?.[params.sessionKey]?.deepMemoryNearCompactionCount
-          : undefined),
-    });
-  } catch {
-    // Best-effort; do not affect the main reply path.
-  }
-
   if (!shouldFlushMemory) {
     return params.sessionEntry;
   }
@@ -122,63 +97,34 @@ export async function runMemoryFlushIfNeeded(params: {
     .join("\n\n");
   try {
     await runWithModelFallback({
-      cfg: params.followupRun.run.config,
-      provider: params.followupRun.run.provider,
-      model: params.followupRun.run.model,
-      agentDir: params.followupRun.run.agentDir,
-      fallbacksOverride: resolveAgentModelFallbacksOverride(
-        params.followupRun.run.config,
-        resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
-      ),
+      ...resolveModelFallbackOptions(params.followupRun.run),
       run: (provider, model) => {
-        const authProfileId =
-          provider === params.followupRun.run.provider
-            ? params.followupRun.run.authProfileId
-            : undefined;
-        return runEmbeddedPiAgent({
-          sessionId: params.followupRun.run.sessionId,
-          sessionKey: params.sessionKey,
-          messageProvider: params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
-          agentAccountId: params.sessionCtx.AccountId,
-          messageTo: params.sessionCtx.OriginatingTo ?? params.sessionCtx.To,
-          messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
-          // Provider threading context for tool auto-injection
-          ...buildThreadingToolContext({
-            sessionCtx: params.sessionCtx,
-            config: params.followupRun.run.config,
-            hasRepliedRef: params.opts?.hasRepliedRef,
-          }),
-          senderId: params.sessionCtx.SenderId?.trim() || undefined,
-          senderName: params.sessionCtx.SenderName?.trim() || undefined,
-          senderUsername: params.sessionCtx.SenderUsername?.trim() || undefined,
-          senderE164: params.sessionCtx.SenderE164?.trim() || undefined,
-          sessionFile: params.followupRun.run.sessionFile,
-          workspaceDir: params.followupRun.run.workspaceDir,
-          agentDir: params.followupRun.run.agentDir,
-          config: params.followupRun.run.config,
-          skillsSnapshot: params.followupRun.run.skillsSnapshot,
-          prompt: memoryFlushSettings.prompt,
-          extraSystemPrompt: flushSystemPrompt,
-          ownerNumbers: params.followupRun.run.ownerNumbers,
-          enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
+        const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts({
+          run: params.followupRun.run,
+          sessionCtx: params.sessionCtx,
+          hasRepliedRef: params.opts?.hasRepliedRef,
+          provider,
+        });
+        const runBaseParams = buildEmbeddedRunBaseParams({
+          run: params.followupRun.run,
           provider,
           model,
-          authProfileId,
-          authProfileIdSource: authProfileId
-            ? params.followupRun.run.authProfileIdSource
-            : undefined,
-          thinkLevel: params.followupRun.run.thinkLevel,
-          verboseLevel: params.followupRun.run.verboseLevel,
-          reasoningLevel: params.followupRun.run.reasoningLevel,
-          execOverrides: params.followupRun.run.execOverrides,
-          bashElevated: params.followupRun.run.bashElevated,
-          timeoutMs: params.followupRun.run.timeoutMs,
           runId: flushRunId,
+          authProfile,
+        });
+        return runEmbeddedPiAgent({
+          ...embeddedContext,
+          ...senderContext,
+          ...runBaseParams,
+          prompt: resolveMemoryFlushPromptForRun({
+            prompt: memoryFlushSettings.prompt,
+            cfg: params.cfg,
+          }),
+          extraSystemPrompt: flushSystemPrompt,
           onAgentEvent: (evt) => {
             if (evt.stream === "compaction") {
               const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-              const willRetry = Boolean(evt.data.willRetry);
-              if (phase === "end" && !willRetry) {
+              if (phase === "end") {
                 memoryCompactionCompleted = true;
               }
             }

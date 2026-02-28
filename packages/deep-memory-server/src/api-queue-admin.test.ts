@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createApi } from "./api.js";
 import type { DeepMemoryServerConfig } from "./config.js";
 import type { DurableForgetQueue } from "./durable-forget-queue.js";
 import type { DurableUpdateQueue } from "./durable-update-queue.js";
@@ -6,7 +7,6 @@ import type { Neo4jStore } from "./neo4j.js";
 import type { QdrantStore } from "./qdrant.js";
 import type { DeepMemoryRetriever } from "./retriever.js";
 import type { DeepMemoryUpdater } from "./updater.js";
-import { createApi } from "./api.js";
 
 describe("API queue admin", () => {
   it("requires x-api-key for /queue/failed/export", async () => {

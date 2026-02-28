@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
+import { resolveDeepMemoryConfig } from "../agents/deep-memory.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { resolveDeepMemoryConfig } from "../agents/deep-memory.js";
 import { updateSessionStoreEntry } from "../config/sessions.js";
 import { capArrayByJsonBytes, readSessionMessages } from "../gateway/session-utils.fs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";

@@ -1,8 +1,8 @@
-import type { Logger } from "pino";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { gzipSync, gunzipSync } from "node:zlib";
+import type { Logger } from "pino";
 import type { UpdateMemoryIndexResponse } from "./types.js";
 import type { DeepMemoryUpdater } from "./updater.js";
 

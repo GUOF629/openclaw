@@ -39,13 +39,15 @@ See [Venice AI](/providers/venice).
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
+- [Mistral](/providers/mistral)
 - [Synthetic](/providers/synthetic)
 - [OpenCode Zen](/providers/opencode)
 - [Z.AI](/providers/zai)
 - [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)
 - [Venice (Venice AI)](/providers/venice)
-- [Amazon Bedrock](/bedrock)
+- [Amazon Bedrock](/providers/bedrock)
+- [Qianfan](/providers/qianfan)
 
 For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
 see [Model providers](/concepts/model-providers).

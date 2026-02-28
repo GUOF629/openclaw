@@ -1,9 +1,9 @@
-import type { CommandHandler } from "./commands-types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveDeepMemoryConfig } from "../../agents/deep-memory.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { DeepMemoryClient } from "../../deep-memory/client.js";
 import { logVerbose } from "../../globals.js";
+import type { CommandHandler } from "./commands-types.js";
 
 type ParsedForgetCommand =
   | {

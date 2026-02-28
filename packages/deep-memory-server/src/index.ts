@@ -1,6 +1,5 @@
 import { serve } from "@hono/node-server";
 import { LRUCache } from "lru-cache";
-import type { RetrieveContextResponse } from "./types.js";
 import { SessionAnalyzer } from "./analyzer.js";
 import { createApi } from "./api.js";
 import { loadConfig } from "./config.js";
@@ -14,6 +13,7 @@ import { QdrantStore } from "./qdrant.js";
 import { DeepMemoryRetriever } from "./retriever.js";
 import { createSensitiveFilter } from "./safety.js";
 import { DEEPMEM_SCHEMA_VERSION } from "./schema.js";
+import type { RetrieveContextResponse } from "./types.js";
 import { DeepMemoryUpdater } from "./updater.js";
 
 async function main() {

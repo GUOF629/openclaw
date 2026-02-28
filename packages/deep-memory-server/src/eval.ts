@@ -3,9 +3,9 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { z } from "zod";
-import type { EvalDataset } from "./eval/types.js";
 import { runEval } from "./eval/harness.js";
 import { createRetrieverForEval } from "./eval/stubs.js";
+import type { EvalDataset } from "./eval/types.js";
 
 const DatasetSchema = z.object({
   version: z.number().int().positive(),

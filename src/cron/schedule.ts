@@ -1,6 +1,14 @@
 import { Cron } from "croner";
-import type { CronSchedule } from "./types.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
+import type { CronSchedule } from "./types.js";
+
+function resolveCronTimezone(tz?: string) {
+  const trimmed = typeof tz === "string" ? tz.trim() : "";
+  if (trimmed) {
+    return trimmed;
+  }
+  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
 
 export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
   if (schedule.kind === "at") {
@@ -33,14 +41,37 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     return anchor + steps * everyMs;
   }
 
-  const expr = schedule.expr.trim();
+  const exprSource = (schedule as { expr?: unknown }).expr;
+  if (typeof exprSource !== "string") {
+    throw new Error("invalid cron schedule: expr is required");
+  }
+  const expr = exprSource.trim();
   if (!expr) {
     return undefined;
   }
   const cron = new Cron(expr, {
-    timezone: schedule.tz?.trim() || undefined,
+    timezone: resolveCronTimezone(schedule.tz),
     catch: false,
   });
   const next = cron.nextRun(new Date(nowMs));
-  return next ? next.getTime() : undefined;
+  if (!next) {
+    return undefined;
+  }
+  const nextMs = next.getTime();
+  if (!Number.isFinite(nextMs)) {
+    return undefined;
+  }
+  if (nextMs > nowMs) {
+    return nextMs;
+  }
+
+  // Guard against same-second rescheduling loops: if croner returns
+  // "now" (or an earlier instant), retry from the next whole second.
+  const nextSecondMs = Math.floor(nowMs / 1000) * 1000 + 1000;
+  const retry = cron.nextRun(new Date(nextSecondMs));
+  if (!retry) {
+    return undefined;
+  }
+  const retryMs = retry.getTime();
+  return Number.isFinite(retryMs) && retryMs > nowMs ? retryMs : undefined;
 }

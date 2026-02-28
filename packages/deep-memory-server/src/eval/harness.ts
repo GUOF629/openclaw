@@ -1,7 +1,7 @@
 import type { DeepMemoryRetriever } from "../retriever.js";
 import type { RetrieveContextResponse } from "../types.js";
-import type { EvalCase } from "./types.js";
 import { clamp } from "../utils.js";
+import type { EvalCase } from "./types.js";
 
 export type EvalCaseResult = {
   name: string;

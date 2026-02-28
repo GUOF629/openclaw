@@ -1,13 +1,13 @@
-import { Type } from "@sinclair/typebox";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { AnyAgentTool } from "./common.js";
 import { DeepMemoryClient } from "../../deep-memory/client.js";
 import { RustFsClient } from "../../rustfs/client.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveDeepMemoryConfig } from "../deep-memory.js";
 import { resolveRustFsConfig } from "../rustfs.js";
+import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
 type FileSearchCandidate = {

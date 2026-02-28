@@ -1,6 +1,6 @@
 import type { DeepMemoryRetriever } from "../retriever.js";
-import type { EvalCase, EvalRelationHit, EvalSemanticHit } from "./types.js";
 import { DeepMemoryRetriever as RealRetriever } from "../retriever.js";
+import type { EvalCase, EvalRelationHit, EvalSemanticHit } from "./types.js";
 
 type FakeQdrant = {
   search: (params: {

@@ -1,10 +1,9 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { resolveDefaultFeishuAccountId, resolveFeishuAccount } from "./accounts.js";
-import { createFeishuClient } from "./client.js";
+import { listEnabledFeishuAccounts } from "./accounts.js";
 import { extractPermissionError } from "./errors.js";
 import { FeishuPermSchema, type FeishuPermParams } from "./perm-schema.js";
-import { resolveToolsConfig } from "./tools-config.js";
+import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
 
 // ============ Helpers ============
 
@@ -119,32 +118,41 @@ async function removeMember(
 // ============ Tool Registration ============
 
 export function registerFeishuPermTools(api: OpenClawPluginApi) {
+  if (!api.config) {
+    api.logger.debug?.("feishu_perm: No config available, skipping perm tools");
+    return;
+  }
+
+  const accounts = listEnabledFeishuAccounts(api.config);
+  if (accounts.length === 0) {
+    api.logger.debug?.("feishu_perm: No Feishu accounts configured, skipping perm tools");
+    return;
+  }
+
+  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
+  if (!toolsCfg.perm) {
+    api.logger.debug?.("feishu_perm: perm tool disabled in config (default: false)");
+    return;
+  }
+
+  type FeishuPermExecuteParams = FeishuPermParams & { accountId?: string };
+
   api.registerTool(
     (ctx) => {
-      const cfg = ctx.config;
-      if (!cfg) {
-        return null;
-      }
-      const accountId = ctx.agentAccountId ?? resolveDefaultFeishuAccountId(cfg);
-      const account = resolveFeishuAccount({ cfg, accountId });
-      if (!account.enabled || !account.configured) {
-        return null;
-      }
-
-      const toolsCfg = resolveToolsConfig(account.config.tools);
-      if (!toolsCfg.perm) {
-        return null;
-      }
-
-      const client = createFeishuClient(account);
+      const defaultAccountId = ctx.agentAccountId;
       return {
         name: "feishu_perm",
         label: "Feishu Perm",
         description: "Feishu permission management. Actions: list, add, remove",
         parameters: FeishuPermSchema,
         async execute(_toolCallId, params) {
-          const p = params as FeishuPermParams;
+          const p = params as FeishuPermExecuteParams;
           try {
+            const client = createFeishuToolClient({
+              api,
+              executeParams: p,
+              defaultAccountId,
+            });
             switch (p.action) {
               case "list":
                 return json(await listMembers(client, p.token, p.type));

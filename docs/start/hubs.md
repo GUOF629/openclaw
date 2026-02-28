@@ -61,9 +61,9 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Presence](/concepts/presence)
 - [Discovery + transports](/gateway/discovery)
 - [Bonjour](/gateway/bonjour)
-- [Channel routing](/concepts/channel-routing)
-- [Groups](/concepts/groups)
-- [Group messages](/concepts/group-messages)
+- [Channel routing](/channels/channel-routing)
+- [Groups](/channels/groups)
+- [Group messages](/channels/group-messages)
 - [Model failover](/concepts/model-failover)
 - [OAuth](/concepts/oauth)
 
@@ -73,7 +73,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Model providers hub](/providers/models)
 - [WhatsApp](/channels/whatsapp)
 - [Telegram](/channels/telegram)
-- [Telegram (grammY notes)](/channels/grammy)
 - [Slack](/channels/slack)
 - [Discord](/channels/discord)
 - [Mattermost](/channels/mattermost) (plugin)
@@ -118,7 +117,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Models](/concepts/models)
 - [Sub-agents](/tools/subagents)
 - [Agent send CLI](/tools/agent-send)
-- [Terminal UI](/tui)
+- [Terminal UI](/web/tui)
 - [Browser control](/tools/browser)
 - [Browser (Linux troubleshooting)](/tools/browser-linux-troubleshooting)
 - [Polls](/automation/poll)
@@ -181,8 +180,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 ## Experiments (exploratory)
 
 - [Onboarding config protocol](/experiments/onboarding-config-protocol)
-- [Cron hardening notes](/experiments/plans/cron-add-hardening)
-- [Group policy hardening notes](/experiments/plans/group-policy-hardening)
 - [Research: memory](/experiments/research/memory)
 - [Model config exploration](/experiments/proposals/model-config)
 
