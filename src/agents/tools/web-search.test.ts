@@ -22,6 +22,8 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  extractKimiMessageText,
+  buildKimiToolResultContent,
   resolveBraveMode,
   mapBraveLlmContextResults,
 } = __testing;
@@ -370,6 +372,53 @@ describe("extractKimiCitations", () => {
         ],
       }).toSorted(),
     ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+  });
+});
+
+describe("extractKimiMessageText", () => {
+  it("returns content when present", () => {
+    expect(extractKimiMessageText({ role: "assistant", content: "hello world" })).toBe(
+      "hello world",
+    );
+  });
+
+  it("falls back to reasoning_content when content is absent", () => {
+    expect(
+      extractKimiMessageText({ role: "assistant", content: "", reasoning_content: "  thought  " }),
+    ).toBe("thought");
+  });
+
+  it("returns undefined when both content and reasoning_content are empty", () => {
+    expect(
+      extractKimiMessageText({ role: "assistant", content: "", reasoning_content: "" }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined for undefined input", () => {
+    expect(extractKimiMessageText(undefined)).toBeUndefined();
+  });
+});
+
+describe("buildKimiToolResultContent", () => {
+  it("serializes search_results as JSON", () => {
+    const result = JSON.parse(
+      buildKimiToolResultContent({
+        search_results: [{ title: "Foo", url: "https://example.com/foo", content: "snippet" }],
+      }),
+    );
+    expect(result).toEqual({
+      search_results: [{ title: "Foo", url: "https://example.com/foo", content: "snippet" }],
+    });
+  });
+
+  it("fills missing fields with empty strings", () => {
+    const result = JSON.parse(buildKimiToolResultContent({ search_results: [{}] }));
+    expect(result.search_results[0]).toEqual({ title: "", url: "", content: "" });
+  });
+
+  it("returns empty array when search_results is absent", () => {
+    const result = JSON.parse(buildKimiToolResultContent({}));
+    expect(result.search_results).toEqual([]);
   });
 });
 
